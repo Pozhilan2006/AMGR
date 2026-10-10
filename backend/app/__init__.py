@@ -1,0 +1,1 @@
+"""AMGR backend application package."""

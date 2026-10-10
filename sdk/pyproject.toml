@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amgr-sdk"
+version = "0.1.0"
+description = "Python SDK interfaces for AMGR event capture and enforcement"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6,<3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["amgr_sdk*"]
