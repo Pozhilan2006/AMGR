@@ -33,6 +33,13 @@ services:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://amgr:amgr_dev_only@db:5432/amgr}
       API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      AI_OPERATOR_PROVIDER: ${AI_OPERATOR_PROVIDER:-openai}
+      AI_OPERATOR_MODEL: ${AI_OPERATOR_MODEL:-gpt-4o-mini}
+      AI_OPERATOR_BASE_URL: ${AI_OPERATOR_BASE_URL:-}
+      AI_OPERATOR_API_KEY: ${AI_OPERATOR_API_KEY:-}
+      AI_OPERATOR_TIMEOUT_SECONDS: ${AI_OPERATOR_TIMEOUT_SECONDS:-30}
+      AI_OPERATOR_MAX_RESPONSE_TOKENS: ${AI_OPERATOR_MAX_RESPONSE_TOKENS:-1200}
+      AI_OPERATOR_TEMPERATURE: ${AI_OPERATOR_TEMPERATURE:-0.2}
     ports:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
