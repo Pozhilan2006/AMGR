@@ -127,6 +127,10 @@ class AuthorizationDecision(BaseModel):
         default=None,
         description="Identifier of the policy that rendered the decision",
     )
+    policy_version: int | None = Field(
+        default=None,
+        description="Version number of the policy that rendered the decision",
+    )
     matched_rule_id: str | None = Field(
         default=None,
         description="Identifier of the primary rule that dictated the outcome",
@@ -146,6 +150,10 @@ class AuthorizationDecision(BaseModel):
     reason_message: str = Field(
         ...,
         description="Human-readable justification for the decision",
+    )
+    missing_attributes: list[str] = Field(
+        default_factory=list,
+        description="Context attribute paths found missing during evaluation",
     )
     evaluated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

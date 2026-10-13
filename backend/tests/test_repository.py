@@ -415,7 +415,7 @@ class TestRepositoryEvaluatorIntegration(unittest.TestCase):
         active = self.repo.list_active_policies()
         decision = evaluate_policies(active, req_missing)
         self.assertEqual(decision.decision, PolicyEffect.BLOCK)
-        self.assertEqual(decision.reason_code, ReasonCode.DEFAULT_FALLBACK)
+        self.assertEqual(decision.reason_code, ReasonCode.MISSING_CONTEXT)
 
 
 if __name__ == "__main__":
