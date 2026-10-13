@@ -13,3 +13,7 @@ class ConfigurationError(AMGRError):
 
 class CaptureError(AMGRError):
     """Raised when event capture, serialization, or instrumentation fails."""
+
+
+class IntegrationError(AMGRError):
+    """Raised when an optional third-party client or integration library is unavailable."""
