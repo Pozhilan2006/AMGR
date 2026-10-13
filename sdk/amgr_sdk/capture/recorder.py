@@ -94,6 +94,8 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
         """Activate child flow context associating nested operations with this event."""
         if self._scope is None:
             self._scope = flow_context(
+                flow_id=self.flow_id,
+                correlation_id=self.correlation_id,
                 parent_event_id=self.event_id,
                 component=self.destination,
             )
@@ -228,6 +230,17 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
             self.exit_context()
         return None
 
+    async def __aenter__(self) -> ActiveOperation:
+        return self.__enter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
+
 
 class EventRecorder:
     """Dispatches FlowEvents to an injected transport with lineage and hygiene preservation."""
@@ -290,7 +303,7 @@ class EventRecorder:
         """
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
-        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else None)
+        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
         resolved_parent_id = parent_event_id if parent_event_id is not None else (ctx.parent_event_id if ctx else None)
         resolved_source = source or (ctx.current_component if ctx and ctx.current_component else None)
         if resolved_source is None:
@@ -367,7 +380,7 @@ class EventRecorder:
         """Record a known source-to-destination data transfer event."""
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
-        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else None)
+        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
         resolved_parent_id = parent_event_id if parent_event_id is not None else (ctx.parent_event_id if ctx else None)
 
         resolved_labels = _resolve_data_labels(data_labels)
@@ -450,7 +463,7 @@ class EventRecorder:
         """
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
-        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else None)
+        resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
         resolved_parent_id = parent_event_id if parent_event_id is not None else (ctx.parent_event_id if ctx else None)
         resolved_source = source or (ctx.current_component if ctx and ctx.current_component else None)
         if resolved_source is None:

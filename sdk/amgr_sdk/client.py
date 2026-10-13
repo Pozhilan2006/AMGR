@@ -136,3 +136,58 @@ class AMGRClient:
         )
         self.record(event)
         return event
+
+    def flow(
+        self,
+        source: ComponentRef | str | None = None,
+        *,
+        flow_id: UUID | str | None = None,
+        correlation_id: UUID | str | None = None,
+        parent_event_id: UUID | str | None = None,
+        metadata: dict[str, Any] | None = None,
+        nested: bool = False,
+    ) -> Any:
+        """Establish an explicit workflow flow context bound to this client."""
+        from amgr_sdk.context import flow
+
+        return flow(
+            source=source,
+            flow_id=flow_id,
+            correlation_id=correlation_id,
+            parent_event_id=parent_event_id,
+            metadata=metadata,
+            nested=nested,
+        )
+
+    def export_context(
+        self,
+        context: Any = None,
+        *,
+        as_headers: bool = False,
+    ) -> dict[str, Any]:
+        """Export the active or given context into a serializable carrier."""
+        from amgr_sdk.context import export_context
+
+        return export_context(context=context, as_headers=as_headers)
+
+    def import_context(
+        self,
+        carrier: Any,
+        *,
+        source: ComponentRef | str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Establish and restore an execution context from an imported carrier."""
+        from amgr_sdk.context import import_context
+
+        return import_context(carrier, source=source, metadata=metadata)
+
+    def restore_context(
+        self,
+        carrier: Any,
+        *,
+        source: ComponentRef | str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Alias for import_context."""
+        return self.import_context(carrier, source=source, metadata=metadata)

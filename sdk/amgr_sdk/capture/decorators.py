@@ -194,6 +194,7 @@ def capture(
                     op.fail(error=exc, status="failed")
                     raise
                 finally:
+                    op.exit_context()
                     rec.strict = original_strict
 
             return async_wrapper  # type: ignore[return-value]
@@ -236,6 +237,7 @@ def capture(
                 op.fail(error=exc, status="failed")
                 raise
             finally:
+                op.exit_context()
                 rec.strict = original_strict
 
         return sync_wrapper  # type: ignore[return-value]
@@ -306,6 +308,7 @@ def capture_span(
             op.fail(error=exc, status="failed")
         raise
     finally:
+        op.exit_context()
         rec.strict = original_strict
 
 
