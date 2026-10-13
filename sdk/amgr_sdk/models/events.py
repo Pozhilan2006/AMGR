@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -239,11 +240,14 @@ class FlowEvent(BaseModel):
 def sanitize_metadata(
     metadata: dict[str, Any],
     *,
-    additional_sensitive_keys: tuple[str, ...] | list[str] = (),
+    additional_sensitive_keys: tuple[str, ...] | Sequence[str] = (),
     redact: bool = True,
     redaction_placeholder: str = "[REDACTED]",
 ) -> dict[str, Any]:
     """Sanitize metadata dictionary by masking or validating sensitive keys.
+
+    Recursively sanitizes nested dictionaries, ensuring application-owned
+    dictionaries are never mutated in place.
 
     If redact is True, values corresponding to disallowed or sensitive keys are
     replaced with redaction_placeholder. If False, a ValueError is raised upon
@@ -251,16 +255,26 @@ def sanitize_metadata(
     """
     sensitive_keys = set(DISALLOWED_METADATA_KEYS)
     for k in additional_sensitive_keys:
-        sensitive_keys.add(k.lower().replace("-", "_"))
+        if isinstance(k, str) and k.strip():
+            sensitive_keys.add(k.strip().lower().replace("-", "_"))
 
-    result = dict(metadata)
-    for key, value in list(result.items()):
+    sanitized: dict[str, Any] = {}
+    for key, value in metadata.items():
         if isinstance(key, str) and key.lower().replace("-", "_") in sensitive_keys:
             if redact:
-                result[key] = redaction_placeholder
+                sanitized[key] = redaction_placeholder
             else:
                 raise ValueError(
                     f"Sensitive key {key!r} is not permitted in event metadata. "
                     "Secrets and credentials must not be emitted in telemetry."
                 )
-    return result
+        elif isinstance(value, dict):
+            sanitized[key] = sanitize_metadata(
+                value,
+                additional_sensitive_keys=additional_sensitive_keys,
+                redact=redact,
+                redaction_placeholder=redaction_placeholder,
+            )
+        else:
+            sanitized[key] = value
+    return sanitized

@@ -32,7 +32,11 @@ class AMGRClient:
         if recorder is None:
             from amgr_sdk.transport.http import HttpTransport
 
-            self._recorder = EventRecorder(HttpTransport(self.config))
+            self._recorder = EventRecorder(
+                HttpTransport(self.config),
+                sensitive_field_keys=self.config.sensitive_field_keys,
+                redact_sensitive_fields=self.config.redact_sensitive_fields,
+            )
         else:
             self._recorder = recorder
 

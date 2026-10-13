@@ -129,6 +129,14 @@ recorder.record_operation(
 - **Lineage preservation**: Causal edges (`parent_event_id`), trace keys (`flow_id`), and correlation keys (`correlation_id`) are automatically propagated across nested agent and tool scopes. Speculative or invented parent relationships are forbidden.
 - **Fail-safe capture**: Runtime telemetry failures log non-intrusively by default and never interrupt application business logic or expose secrets, unless strict error raising (`raise_transport_errors=True` or `strict=True`) is explicitly enabled.
 - **Metadata sanitization**: The SDK provides `sanitize_metadata(metadata, redact=True)` to mask sensitive fields as `"[REDACTED]"`.
+  - **Recursive sanitization**: Nested dictionaries are sanitized recursively and copied to prevent mutating application-owned objects.
+  - **Configurable sensitive keys**: In addition to hardcoded `DISALLOWED_METADATA_KEYS`, extra keys can be specified via `AMGR_SENSITIVE_KEYS="ssn,credit_card,jwt"` or `AMGRConfig(sensitive_field_keys=(...))`.
+  - **Configurable redaction mode**: When `AMGR_REDACT_SENSITIVE_FIELDS="false"`, sensitive keys trigger immediate `ValueError` rejection rather than replacement with `"[REDACTED]"`.
+- **Protocol boundaries**:
+  - **HTTP capture**: Strips query parameters, fragments, user credentials, request/response bodies, cookies, and authorization headers by default.
+  - **Database capture**: Never records SQL query text, parameters/bound values, returned rows, or connection credentials. Only safe operation categories (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `UNKNOWN`) are retained.
+- **Data classification**: Explicitly supplied data labels (e.g. `data_labels=["pii", "financial"]`) are preserved. When classification is unavailable, `["unknown"]` is used as the normalized fallback.
+- **Limitations**: Redaction is rule- and key-based. The SDK does **not** perform heuristic or universal natural language pattern matching on arbitrary unstructured text strings. Callers remain responsible for not injecting secrets into custom action strings or non-sensitive metadata values.
 
 ---
 
