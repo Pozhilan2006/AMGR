@@ -347,13 +347,64 @@ class PolicyRepository:
             return list(self._history)
         return [e for e in self._history if e.policy_id == policy_id]
 
-    def list_active_policies(self) -> list[PolicyRead]:
-        """Returns the current revision of all enabled policies, sorted by priority."""
-        active = [
-            self._revisions[p_id][ver]
-            for p_id, ver in self._current_versions.items()
-            if self._revisions[p_id][ver].enabled
-        ]
+    @staticmethod
+    def _is_policy_applicable(
+        policy: PolicyRead,
+        action: str | None = None,
+        resource: str | None = None,
+    ) -> bool:
+        """Determines whether an enabled policy could apply to the given action and resource.
+
+        Semantic rules:
+        - If both action and resource are None, the policy is applicable.
+        - A policy is applicable if ANY of its enabled rules could apply.
+        - For an enabled rule:
+          - target_actions=None means unrestricted for all actions.
+          - target_resources=None means unrestricted for all resources.
+          - If target_actions is a list, the requested action must be in that list.
+          - If target_resources is a list, the requested resource must be in that list.
+          - Empty target lists ([]) never match any action or resource.
+        """
+        if action is None and resource is None:
+            return True
+
+        for rule in policy.rules:
+            if not rule.enabled:
+                continue
+
+            # Check action scoping filter
+            if action is not None and rule.target_actions is not None:
+                if action not in rule.target_actions:
+                    continue
+
+            # Check resource scoping filter
+            if resource is not None and rule.target_resources is not None:
+                if resource not in rule.target_resources:
+                    continue
+
+            # This enabled rule is compatible with (or unrestricted for) action and resource
+            return True
+
+        return False
+
+    def list_active_policies(
+        self,
+        action: str | None = None,
+        resource: str | None = None,
+    ) -> list[PolicyRead]:
+        """Returns the current revision of all enabled policies, optionally filtered by action and resource.
+
+        Policies are sorted primarily by priority descending, with ties broken by policy ID ascending.
+        A policy is included if it is enabled and at least one enabled rule can apply to the
+        specified action and resource (or if action and resource are unrestricted).
+        """
+        active: list[PolicyRead] = []
+        for p_id, ver in self._current_versions.items():
+            policy = self._revisions[p_id][ver]
+            if not policy.enabled:
+                continue
+            if self._is_policy_applicable(policy, action=action, resource=resource):
+                active.append(policy)
         return sort_policies(active)
 
     def list_all_policies(self) -> list[PolicyRead]:

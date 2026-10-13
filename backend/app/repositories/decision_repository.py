@@ -48,6 +48,22 @@ class DecisionRepository:
             else str(request.subject)
         )
 
+        context_dict: dict[str, Any] | None = None
+        if isinstance(request.context, dict):
+            context_dict = dict(request.context)
+        elif request.context is not None:
+            context_dict = {"raw_context": request.context}
+
+        if decision.policy_version is not None:
+            if context_dict is None:
+                context_dict = {}
+            context_dict["policy_version"] = decision.policy_version
+
+        if decision.missing_attributes:
+            if context_dict is None:
+                context_dict = {}
+            context_dict["missing_attributes"] = list(decision.missing_attributes)
+
         record_data = {
             "id": decision_id,
             "trace_id": request.trace_id,
@@ -65,7 +81,7 @@ class DecisionRepository:
                 else str(decision.reason_code)
             ),
             "reason_message": decision.reason_message,
-            "context_data": request.context,
+            "context_data": context_dict,
             "evaluated_at": decision.evaluated_at,
         }
 
