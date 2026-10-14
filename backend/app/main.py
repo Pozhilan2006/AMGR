@@ -6,12 +6,61 @@ and provides application factory with dependency injection.
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.util
 import os
 import sys
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+
+class _AppAliasLoader(importlib.abc.Loader):
+    """Loads and returns the corresponding backend.app.* module."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def create_module(self, spec: Any) -> Any:
+        import importlib
+        return importlib.import_module(self.name)
+
+    def exec_module(self, module: Any) -> None:
+        pass
+
+
+class _AppAliasFinder(importlib.abc.MetaPathFinder):
+    """Resolves 'app.*' imports directly to 'backend.app.*' to prevent dual-loading of models."""
+
+    def find_spec(self, fullname: str, path: Any, target: Any = None) -> Any:
+        if fullname == "app" or fullname.startswith("app."):
+            backend_fullname = "backend." + fullname
+            try:
+                backend_spec = importlib.util.find_spec(backend_fullname)
+                if backend_spec is not None:
+                    return importlib.util.spec_from_loader(
+                        fullname,
+                        _AppAliasLoader(backend_fullname),
+                        origin=backend_spec.origin,
+                    )
+            except Exception:
+                pass
+        return None
+
+
+if not any(isinstance(f, _AppAliasFinder) for f in sys.meta_path):
+    sys.meta_path.insert(0, _AppAliasFinder())
+
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.elements import TextClause
+
+
+@compiles(TextClause, "sqlite")
+def _compile_text_sqlite(element: Any, compiler: Any, **kw: Any) -> str:
+    """Strips PostgreSQL-specific '::jsonb' type casts when executing DDL on SQLite."""
+    text_val = str(getattr(element, "text", ""))
+    return text_val.replace("::jsonb", "")
 
 from backend.app.api.authorization import (
     get_approval_service,

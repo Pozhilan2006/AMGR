@@ -1,14 +1,24 @@
 """Database models package for AMGR.
 
-Exports PolicyModel, PolicyVersionModel, and PolicyDecisionModel.
+Exports PolicyModel, PolicyVersionModel, PolicyDecisionModel,
+GraphNode, GraphEdge, FlowEventRecord, and LineageRecord.
 """
 
-from backend.app.models.policy import PolicyModel
-from backend.app.models.policy_decision import PolicyDecisionModel
-from backend.app.models.policy_version import PolicyVersionModel
+from .flow_event import FlowEventRecord, PersistedFlowEvent
+from .graph_edge import GraphEdge
+from .graph_node import GraphNode
+from .lineage_record import LineageRecord
+from .policy import PolicyModel
+from .policy_decision import PolicyDecisionModel
+from .policy_version import PolicyVersionModel
 
 __all__ = [
     "PolicyModel",
     "PolicyVersionModel",
     "PolicyDecisionModel",
+    "GraphNode",
+    "GraphEdge",
+    "FlowEventRecord",
+    "PersistedFlowEvent",
+    "LineageRecord",
 ]
