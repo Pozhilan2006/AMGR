@@ -18,6 +18,10 @@ from backend.app.api.authorization import (
     get_policy_repository,
     router as authorization_router,
 )
+try:
+    from backend.app.api.router import api_router
+except ImportError:
+    from app.api.router import api_router
 from backend.app.repositories.policy_repository import PolicyRepository
 from backend.app.services.approval_service import ApprovalService
 from backend.app.services.authorization_service import AuthorizationService
@@ -67,6 +71,9 @@ def create_app(
     if api_prefix != "":
         # Also mount router without prefix for direct route compatibility
         app.include_router(authorization_router)
+
+    # Mount central API router under configured prefix
+    app.include_router(api_router, prefix=api_prefix)
 
     return app
 
