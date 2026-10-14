@@ -230,6 +230,14 @@ class FlowEventRecord(Base):
 
     def to_flow_event_dict(self) -> dict[str, Any]:
         """Export fields matching the public FlowEvent contract."""
+        raw_meta = self.event_metadata
+        if isinstance(raw_meta, dict):
+            filtered_meta = {
+                k: v for k, v in raw_meta.items() if not (isinstance(k, str) and k.startswith("_"))
+            }
+        else:
+            filtered_meta = {}
+
         return {
             "event_id": self.event_id,
             "flow_id": self.flow_id,
@@ -240,7 +248,7 @@ class FlowEventRecord(Base):
             "destination": self.destination,
             "action": self.action,
             "data_labels": self.data_labels,
-            "metadata": self.event_metadata,
+            "metadata": filtered_meta,
             "status": self.status,
             "duration_ms": self.duration_ms,
         }
