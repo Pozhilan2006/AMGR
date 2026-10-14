@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -33,3 +34,24 @@ class FlowEvent(BaseModel):
         if value.utcoffset() is None:
             raise ValueError("timestamp must include a timezone")
         return value.astimezone(timezone.utc)
+
+
+class IngestionStatus(str, Enum):
+    """Status indicating whether an incoming event was freshly ingested or recognized as a retry."""
+
+    ACCEPTED = "accepted"
+    ALREADY_PROCESSED = "already_processed"
+
+
+class FlowEventIngestionResponse(BaseModel):
+    """Response envelope for runtime flow event ingestion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    status: IngestionStatus
+    flow_id: UUID
+    edge_id: UUID | None = None
+    source_node_id: UUID | None = None
+    destination_node_id: UUID | None = None
+    message: str | None = None
