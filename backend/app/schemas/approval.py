@@ -158,14 +158,39 @@ class ApprovalRequest(BaseModel):
         default=PolicyEffect.REQUIRE_APPROVAL,
         description="Effective enforcement permission state (only ALLOW permits execution)",
     )
+    expires_at: datetime | None = Field(
+        default=None,
+        description="UTC timestamp when the approval request expires",
+    )
 
-    def is_pending(self) -> bool:
-        """Returns True if the approval is pending human action."""
-        return self.status == ApprovalStatus.PENDING
+    def is_pending(self, now: datetime | None = None) -> bool:
+        """Returns True if the approval is pending human action and has not expired."""
+        if self.status != ApprovalStatus.PENDING:
+            return False
+        if self.expires_at is not None:
+            current = now if now is not None else datetime.now(timezone.utc)
+            if current >= self.expires_at:
+                return False
+        return True
 
-    def is_approved(self) -> bool:
-        """Returns True only if the request has been explicitly approved."""
-        return self.status == ApprovalStatus.APPROVED and self.final_effect == PolicyEffect.ALLOW
+    def is_approved(self, now: datetime | None = None) -> bool:
+        """Returns True only if the request has been explicitly approved and has not expired."""
+        if self.status != ApprovalStatus.APPROVED or self.final_effect != PolicyEffect.ALLOW:
+            return False
+        if self.expires_at is not None:
+            current = now if now is not None else datetime.now(timezone.utc)
+            if current >= self.expires_at:
+                return False
+        return True
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        """Returns True if the approval is explicitly EXPIRED or has passed expires_at."""
+        if self.status == ApprovalStatus.EXPIRED:
+            return True
+        if self.expires_at is not None:
+            current = now if now is not None else datetime.now(timezone.utc)
+            return current >= self.expires_at
+        return False
 
     def is_terminal(self) -> bool:
         """Returns True if the approval request has reached a terminal state."""
@@ -174,3 +199,46 @@ class ApprovalRequest(BaseModel):
             ApprovalStatus.REJECTED,
             ApprovalStatus.EXPIRED,
         )
+
+
+class ApprovalCancellationSubmission(BaseModel):
+    """Payload submitted by a human reviewer or operator to cancel/invalidate an approval request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    actor: str = Field(
+        ...,
+        description="Authenticated human reviewer identity submitting the cancellation",
+    )
+    reason: str = Field(
+        ...,
+        description="Justification or rationale for cancelling the approval request",
+    )
+    is_ai_or_llm: bool = Field(
+        default=False,
+        description="Safety flag indicating if the submitter is an AI or LLM operator (must be False)",
+    )
+
+    @field_validator("actor")
+    @classmethod
+    def validate_actor(cls, v: str) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("Actor identity must be a non-empty string.")
+        trimmed = v.strip()
+        lower = trimmed.lower()
+        if lower.startswith("ai:") or lower.startswith("llm:"):
+            raise ValueError(
+                f"Actor identity '{trimmed}' represents an automated AI/LLM entity. "
+                "Only authorized human actors may cancel approval requests."
+            )
+        return trimmed
+
+    @field_validator("is_ai_or_llm")
+    @classmethod
+    def validate_human_only(cls, v: bool) -> bool:
+        if v:
+            raise ValueError(
+                "Automated AI/LLM entities are forbidden from cancelling approval requests. "
+                "Explicit human action is required."
+            )
+        return False

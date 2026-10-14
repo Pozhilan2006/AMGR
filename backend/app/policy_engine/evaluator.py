@@ -21,9 +21,12 @@ from backend.app.schemas.condition import (
     resolve_attribute,
 )
 from backend.app.schemas.policy import (
+    ConflictDetectionResult,
     PolicyCreate,
     PolicyRead,
+    PolicySimulationResponse,
     RuleDefinition,
+    RuleSimulationTrace,
     sort_policies,
 )
 from backend.app.schemas.policy_enums import (
@@ -847,4 +850,222 @@ def evaluate_policies(
         missing_attributes=[],
         evaluated_at=now,
     )
+
+
+def detect_policy_conflicts(
+    policy: PolicyCreate | PolicyRead,
+) -> list[ConflictDetectionResult]:
+    """Analyzes a policy's rules for internal conflicts, shadowing, and redundancies.
+
+    Detects:
+    - DISABLED_RULE: Rules that are disabled and will never match in evaluation.
+    - SHADOWED: Under FIRST_APPLICABLE, a rule that is preceded by a higher or equal
+      priority rule with identical condition and scope filters.
+    - OPPOSING_EFFECT: Rules that share identical condition and scope filters but
+      specify contradictory enforcement effects.
+    - REDUNDANT: Rules with identical conditions, scope filters, and effects.
+    """
+    conflicts: list[ConflictDetectionResult] = []
+
+    # 1. Disabled rule audit
+    for rule in policy.rules:
+        if not rule.enabled:
+            conflicts.append(
+                ConflictDetectionResult(
+                    rule_id=rule.id,
+                    shadowed_by_rule_id=None,
+                    conflict_type="DISABLED_RULE",
+                    description=f"Rule '{rule.id}' is disabled and will never evaluate to True.",
+                )
+            )
+
+    # 2. Pairwise rule comparison across sorted execution order
+    sorted_rules = policy.get_sorted_rules()
+    for i in range(len(sorted_rules)):
+        r1 = sorted_rules[i]
+        for j in range(i + 1, len(sorted_rules)):
+            r2 = sorted_rules[j]
+
+            # Scoping filters match if both are identical or both empty
+            same_actions = (r1.target_actions == r2.target_actions) or (
+                not r1.target_actions and not r2.target_actions
+            )
+            same_resources = (r1.target_resources == r2.target_resources) or (
+                not r1.target_resources and not r2.target_resources
+            )
+
+            # Condition equivalence via serialized comparison
+            c1_dict = (
+                r1.condition.model_dump()
+                if hasattr(r1.condition, "model_dump")
+                else dict(r1.condition)
+            )
+            c2_dict = (
+                r2.condition.model_dump()
+                if hasattr(r2.condition, "model_dump")
+                else dict(r2.condition)
+            )
+            same_condition = c1_dict == c2_dict
+
+            if same_actions and same_resources and same_condition:
+                if policy.resolution_algorithm == RuleResolutionAlgorithm.FIRST_APPLICABLE:
+                    if r1.effect != r2.effect:
+                        conflicts.append(
+                            ConflictDetectionResult(
+                                rule_id=r2.id,
+                                shadowed_by_rule_id=r1.id,
+                                conflict_type="OPPOSING_EFFECT",
+                                description=(
+                                    f"Rule '{r2.id}' ({r2.effect.value}) is shadowed by earlier rule "
+                                    f"'{r1.id}' ({r1.effect.value}) with identical conditions but opposing effect under FIRST_APPLICABLE."
+                                ),
+                            )
+                        )
+                    else:
+                        conflicts.append(
+                            ConflictDetectionResult(
+                                rule_id=r2.id,
+                                shadowed_by_rule_id=r1.id,
+                                conflict_type="REDUNDANT",
+                                description=(
+                                    f"Rule '{r2.id}' is redundant and shadowed by earlier rule '{r1.id}' with identical conditions and effect."
+                                ),
+                            )
+                        )
+                else:
+                    if r1.effect != r2.effect:
+                        conflicts.append(
+                            ConflictDetectionResult(
+                                rule_id=r2.id,
+                                shadowed_by_rule_id=r1.id,
+                                conflict_type="OPPOSING_EFFECT",
+                                description=(
+                                    f"Rule '{r2.id}' ({r2.effect.value}) conflicts with rule '{r1.id}' ({r1.effect.value}) "
+                                    f"on identical conditions under {policy.resolution_algorithm.value}."
+                                ),
+                            )
+                        )
+                    else:
+                        conflicts.append(
+                            ConflictDetectionResult(
+                                rule_id=r2.id,
+                                shadowed_by_rule_id=r1.id,
+                                conflict_type="REDUNDANT",
+                                description=(
+                                    f"Rule '{r2.id}' is redundant with rule '{r1.id}' (identical conditions and effect)."
+                                ),
+                            )
+                        )
+
+    return conflicts
+
+
+def simulate_policy_evaluation(
+    policy: PolicyCreate | PolicyRead,
+    request: AuthorizationRequest,
+    policy_version: int | None = None,
+) -> PolicySimulationResponse:
+    """Simulates evaluation of an AuthorizationRequest against a policy.
+
+    Guarantees:
+    - Purely analytical and read-only: does not persist decisions or trigger approval records.
+    - Returns full per-rule execution trace with explanations.
+    - Identifies rule conflicts, shadows, and disabled rules.
+    - Faithfully mirrors the deterministic evaluation invariants of evaluate_policy.
+    """
+    conflicts = detect_policy_conflicts(policy)
+    sorted_rules = policy.get_sorted_rules()
+    traces: list[RuleSimulationTrace] = []
+    eval_ctx = request.to_eval_context()
+
+    for rule in sorted_rules:
+        if not rule.enabled:
+            traces.append(
+                RuleSimulationTrace(
+                    rule_id=rule.id,
+                    rule_name=rule.name,
+                    priority=rule.priority,
+                    effect=rule.effect,
+                    matched=False,
+                    scope_matched=True,
+                    missing_attributes=[],
+                    reason="Rule is disabled and skipped during evaluation.",
+                )
+            )
+            continue
+
+        # Check scoping filters
+        action_match = True
+        if rule.target_actions is not None:
+            action_match = request.action in rule.target_actions
+        resource_match = True
+        if rule.target_resources is not None:
+            resource_match = request.resource in rule.target_resources
+
+        scope_matched = action_match and resource_match
+        if not scope_matched:
+            reasons = []
+            if not action_match:
+                reasons.append(f"action '{request.action}' not in target_actions {rule.target_actions}")
+            if not resource_match:
+                reasons.append(f"resource '{request.resource}' not in target_resources {rule.target_resources}")
+            traces.append(
+                RuleSimulationTrace(
+                    rule_id=rule.id,
+                    rule_name=rule.name,
+                    priority=rule.priority,
+                    effect=rule.effect,
+                    matched=False,
+                    scope_matched=False,
+                    missing_attributes=[],
+                    reason="; ".join(reasons),
+                )
+            )
+            continue
+
+        # Evaluate condition AST
+        cond_res = _evaluate_condition_internal(rule.condition, eval_ctx)
+        if cond_res.matched:
+            reason = f"Condition matched successfully with effect {rule.effect.value}."
+        elif cond_res.missing_attributes:
+            reason = f"Condition did not match due to missing attributes: {', '.join(cond_res.missing_attributes)}."
+        else:
+            reason = "Condition evaluated to False (attribute values did not satisfy condition)."
+
+        traces.append(
+            RuleSimulationTrace(
+                rule_id=rule.id,
+                rule_name=rule.name,
+                priority=rule.priority,
+                effect=rule.effect,
+                matched=cond_res.matched,
+                scope_matched=True,
+                missing_attributes=cond_res.missing_attributes,
+                reason=reason,
+            )
+        )
+
+    # Compute authoritative decision using evaluate_policy
+    decision = evaluate_policy(policy, request)
+
+    resolved_version = (
+        policy_version
+        if policy_version is not None
+        else getattr(policy, "version", None)
+    )
+
+    return PolicySimulationResponse(
+        policy_id=policy.id,
+        policy_version=resolved_version,
+        decision=decision.decision,
+        matched_rule_id=decision.matched_rule_id,
+        matched_rule_ids=decision.matched_rule_ids,
+        reason_code=decision.reason_code,
+        reason_message=decision.reason_message,
+        missing_attributes=decision.missing_attributes,
+        rule_traces=traces,
+        conflicts=conflicts,
+        simulated_at=datetime.now(timezone.utc),
+    )
+
 
