@@ -27,6 +27,7 @@ from amgr_sdk.context import (
     restore_context,
     set_flow_context,
 )
+from amgr_sdk.delivery import DeliveryMetrics, DeliveryPipeline, EventQueue, QueuedTransport
 from amgr_sdk.exceptions import (
     AMGRError,
     CaptureError,
@@ -63,6 +64,7 @@ from amgr_sdk.models.events import (
     sanitize_metadata,
 )
 from amgr_sdk.transport.base import (
+    AsyncTransport,
     BatchTransportError,
     Transport,
     TransportConnectionError,
@@ -73,6 +75,7 @@ from amgr_sdk.transport.http import HttpTransport
 __all__ = [
     "AMGRClient",
     "AMGRConfig",
+    "AsyncTransport",
     "AMGRError",
     "AMGRInstrumentedConnection",
     "AMGRInstrumentedCursor",
@@ -81,6 +84,10 @@ __all__ = [
     "CaptureError",
     "ComponentRef",
     "ConfigurationError",
+    "DeliveryMetrics",
+    "DeliveryPipeline",
+    "EventQueue",
+    "QueuedTransport",
     "DISALLOWED_METADATA_KEYS",
     "EventRecorder",
     "FlowContext",

@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from amgr_sdk.exceptions import AMGRError
 from amgr_sdk.models.events import FlowEvent
@@ -54,9 +54,20 @@ class BatchTransportError(TransportError):
         self.cause = cause
 
 
+@runtime_checkable
 class Transport(Protocol):
     def send(self, event: FlowEvent) -> None:
         """Submit one event using an implementation supplied by the application."""
 
     def send_batch(self, events: Sequence[FlowEvent]) -> None:
         """Submit a sequence of events using an implementation supplied by the application."""
+
+@runtime_checkable
+class AsyncTransport(Protocol):
+    """Protocol for asynchronous event delivery."""
+
+    async def send_async(self, event: FlowEvent) -> None:
+        """Asynchronously submit one event using an implementation supplied by the application."""
+
+    async def send_batch_async(self, events: Sequence[FlowEvent]) -> None:
+        """Asynchronously submit a sequence of events using an implementation supplied by the application."""
