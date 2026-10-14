@@ -2,15 +2,22 @@
 
 ## Current implementation
 
-The dashboard route `/graph` is an integration-status page. It does not render graph
-nodes or relationships because the current backend does not provide graph records.
-No mock or inferred graph data is used. The existing `/flow-graph` URL remains a
-compatibility alias to the same status.
+The dashboard route `/graph` now renders the Phase 2 frontend shell for graph data,
+loading/error/unavailable states, filter placeholders, component details, and lineage
+panels. It does not render a live React Flow graph because the current backend does
+not provide authoritative graph records, neighborhoods, lineage, or event-history
+queries. No mock or inferred graph data is used. The existing `/flow-graph` URL
+remains a compatibility alias to the same status.
 
 The frontend API helper targets the configured API base URL plus `GET /graph`.
 With the default backend prefix, this is `GET /api/v1/graph`. The route exists in
 `backend/app/api/routes/graph.py`, but always raises HTTP 501
 (`Flow graph queries are not implemented.`).
+
+The frontend intentionally does not add `@xyflow/react` until Member 2 provides a
+working snapshot contract compatible with rendered node and edge data. The graph UI
+is structured to support React Flow integration once the backend becomes available,
+while preserving explicit unavailable states rather than simulating a successful graph.
 
 ## Declared schemas versus implemented API
 

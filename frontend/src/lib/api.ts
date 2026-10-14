@@ -2,6 +2,10 @@ import type {
   Approval,
   AuthorizationDecision,
   FlowGraphResponse,
+  GraphComponentDetail,
+  GraphEventHistoryResponse,
+  GraphFilterState,
+  GraphLineageResponse,
   OperatorChatRequest,
   OperatorChatResponse,
   Policy,
@@ -144,6 +148,45 @@ export function getHealth(): Promise<{ status: string }> {
 
 export function getFlowGraph(): Promise<FlowGraphResponse> {
   return apiFetch<FlowGraphResponse>("/graph");
+}
+
+export function getGraphNeighborhood(
+  componentId: string,
+  params: Partial<GraphFilterState> = {},
+): Promise<GraphComponentDetail> {
+  const query = new URLSearchParams();
+  if (componentId) query.set("component_id", componentId);
+  if (params.componentType) query.set("component_type", params.componentType);
+  if (params.flowId) query.set("flow_id", params.flowId);
+  if (params.start) query.set("start", params.start);
+  if (params.end) query.set("end", params.end);
+
+  throw new ApiError(
+    "AMGR graph neighborhood is not implemented yet by Member 2.",
+    "unavailable",
+  );
+}
+
+export function getGraphEvents(
+  params: Partial<GraphFilterState> & { edge_id?: string } = {},
+): Promise<GraphEventHistoryResponse> {
+  if (params.edge_id) {
+    void params;
+  }
+  throw new ApiError(
+    "AMGR relationship event-history queries are not exposed yet.",
+    "unavailable",
+  );
+}
+
+export function getLineage(
+  params: { component_id: string; direction: "upstream" | "downstream"; limit?: number },
+): Promise<GraphLineageResponse> {
+  void params;
+  throw new ApiError(
+    "AMGR lineage queries are not implemented yet by Member 2.",
+    "unavailable",
+  );
 }
 
 export function getPolicies(): Promise<Policy[]> {
