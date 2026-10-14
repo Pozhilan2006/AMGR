@@ -73,5 +73,6 @@ class PolicyChangeType(str, Enum):
     UPDATED = "UPDATED"
     ACTIVATED = "ACTIVATED"
     DEACTIVATED = "DEACTIVATED"
+    ROLLED_BACK = "ROLLED_BACK"
 
 

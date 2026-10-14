@@ -33,6 +33,7 @@ except ModuleNotFoundError:
         return decorator
 
 
+from backend.app.schemas.authorization import AuthorizationRequest, ReasonCode
 from backend.app.schemas.condition import ConditionGroup, ConditionRule
 from backend.app.schemas.policy_enums import (
     PolicyChangeType,
@@ -326,3 +327,173 @@ def sort_policies(
     return sorted(policies, key=lambda p: (-p.priority, p.id))
 
 
+class FieldChange(BaseModel):
+    """Represents an attribute difference between two policy versions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    old: Any = Field(default=None, description="Previous value")
+    new: Any = Field(default=None, description="New value")
+
+
+class RuleDiff(BaseModel):
+    """Represents differences in an individual rule between revisions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str = Field(..., description="Identifier of the rule")
+    change_type: str = Field(..., description="Change classification: 'ADDED', 'REMOVED', or 'MODIFIED'")
+    changes: dict[str, FieldChange] = Field(
+        default_factory=dict,
+        description="Field-by-field differences if rule was modified",
+    )
+    rule: RuleDefinition | None = Field(
+        default=None,
+        description="Full rule definition if added or removed",
+    )
+
+
+class PolicyDiff(BaseModel):
+    """Semantic comparison between two policy revisions or against a proposed update."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    policy_id: str = Field(..., description="Identifier of the policy compared")
+    from_version: int = Field(..., description="Base version number")
+    to_version: int | None = Field(
+        default=None,
+        description="Target version number, or None if comparing against a proposed update",
+    )
+    has_changes: bool = Field(..., description="Whether any differences exist between versions")
+    metadata_changes: dict[str, FieldChange] = Field(
+        default_factory=dict,
+        description="Differences in policy-level attributes (name, description, priority, enabled, algorithms)",
+    )
+    rules_added: list[RuleDefinition] = Field(
+        default_factory=list,
+        description="Rules present in target but not in base",
+    )
+    rules_removed: list[RuleDefinition] = Field(
+        default_factory=list,
+        description="Rules present in base but not in target",
+    )
+    rules_modified: list[RuleDiff] = Field(
+        default_factory=list,
+        description="Rules modified between versions with detailed attribute changes",
+    )
+
+
+class RuleSimulationTrace(BaseModel):
+    """Detailed evaluation trace of an individual rule during policy simulation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str = Field(..., description="Unique rule identifier")
+    rule_name: str = Field(..., description="Human-readable rule name")
+    priority: int = Field(..., description="Rule priority")
+    effect: PolicyEffect = Field(..., description="Rule effect (ALLOW, BLOCK, REQUIRE_APPROVAL)")
+    matched: bool = Field(..., description="Whether rule condition matched the hypothetical request")
+    scope_matched: bool = Field(..., description="Whether target_actions and target_resources matched")
+    missing_attributes: list[str] = Field(
+        default_factory=list,
+        description="Attributes required by condition that were missing from request context",
+    )
+    reason: str = Field(..., description="Explanation of evaluation outcome for this rule")
+
+
+class ConflictDetectionResult(BaseModel):
+    """Analysis of rule conflicts, shadows, or redundancies within a policy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str = Field(..., description="Rule identifier subject to conflict, shadow, or redundancy")
+    shadowed_by_rule_id: str | None = Field(
+        default=None,
+        description="Higher priority or preceding rule that shadows or overrides this rule",
+    )
+    conflict_type: str = Field(
+        ...,
+        description="Conflict classification: 'SHADOWED', 'REDUNDANT', 'OPPOSING_EFFECT', or 'DISABLED_RULE'",
+    )
+    description: str = Field(..., description="Detailed explanation of the detected conflict or shadowing")
+
+
+class PolicySimulationRequest(BaseModel):
+    """Payload for simulating policy evaluation against a hypothetical authorization request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request: AuthorizationRequest = Field(
+        ...,
+        description="Hypothetical authorization request to evaluate",
+    )
+    candidate_policy: PolicyCreate | None = Field(
+        default=None,
+        description="Optional draft/candidate policy definition to simulate without persistence",
+    )
+    policy_id: str | None = Field(
+        default=None,
+        description="Optional ID of existing persisted policy to simulate against",
+    )
+    version: int | None = Field(
+        default=None,
+        description="Specific historical revision version to simulate against (for existing policy)",
+    )
+
+
+class PolicySimulationResponse(BaseModel):
+    """Outcome of policy simulation containing simulated decision, rule traces, and conflict analysis."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    policy_id: str = Field(..., description="Identifier of the policy evaluated")
+    policy_version: int | None = Field(
+        default=None,
+        description="Version number of the policy evaluated, if known",
+    )
+    decision: PolicyEffect = Field(
+        ...,
+        description="Simulated decision effect (ALLOW, BLOCK, REQUIRE_APPROVAL)",
+    )
+    matched_rule_id: str | None = Field(
+        default=None,
+        description="Primary rule ID that determined the decision outcome",
+    )
+    matched_rule_ids: list[str] = Field(
+        default_factory=list,
+        description="All rule IDs that satisfied conditions for this request",
+    )
+    reason_code: ReasonCode = Field(..., description="Standardized reason code")
+    reason_message: str = Field(..., description="Human-readable decision explanation")
+    missing_attributes: list[str] = Field(
+        default_factory=list,
+        description="Attributes required by conditions that were missing from request context",
+    )
+    rule_traces: list[RuleSimulationTrace] = Field(
+        default_factory=list,
+        description="Ordered trace of all rules evaluated in execution order",
+    )
+    conflicts: list[ConflictDetectionResult] = Field(
+        default_factory=list,
+        description="Detected rule conflicts, shadows, or redundancies within the policy",
+    )
+    simulated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC timestamp of simulation execution",
+    )
+
+
+class PolicyRollbackRequest(BaseModel):
+    """Payload for rolling back an active or retired policy to a historical revision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    target_version: int = Field(
+        ...,
+        ge=1,
+        description="Target historical revision version number to restore",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Optional human-readable audit description or justification for the rollback",
+    )

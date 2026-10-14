@@ -15,18 +15,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.authorization import (
     get_approval_service,
     get_authorization_service,
+    get_decision_repository,
     get_policy_repository,
     router as authorization_router,
 )
+from backend.app.api.routes.policies import (
+    get_policy_service,
+    router as policies_router,
+)
+from backend.app.repositories.decision_repository import DecisionRepository
 from backend.app.repositories.policy_repository import PolicyRepository
 from backend.app.services.approval_service import ApprovalService
 from backend.app.services.authorization_service import AuthorizationService
+from backend.app.services.policy_service import PolicyService
 
 
 def create_app(
     policy_repo: PolicyRepository | None = None,
     approval_service: ApprovalService | None = None,
     auth_service: AuthorizationService | None = None,
+    policy_service: PolicyService | None = None,
+    decision_repo: DecisionRepository | None = None,
 ) -> FastAPI:
     """Creates and configures the FastAPI application instance.
 
@@ -54,6 +63,10 @@ def create_app(
         app.dependency_overrides[get_approval_service] = lambda: approval_service
     if auth_service is not None:
         app.dependency_overrides[get_authorization_service] = lambda: auth_service
+    if policy_service is not None:
+        app.dependency_overrides[get_policy_service] = lambda: policy_service
+    if decision_repo is not None:
+        app.dependency_overrides[get_decision_repository] = lambda: decision_repo
 
     # Health check endpoints
     @app.get("/health", tags=["system"])
@@ -67,6 +80,11 @@ def create_app(
     if api_prefix != "":
         # Also mount router without prefix for direct route compatibility
         app.include_router(authorization_router)
+
+    # Include policies router under configured prefix and at root for flexibility
+    app.include_router(policies_router, prefix=f"{api_prefix}/policies")
+    if api_prefix != "":
+        app.include_router(policies_router, prefix="/policies")
 
     return app
 
