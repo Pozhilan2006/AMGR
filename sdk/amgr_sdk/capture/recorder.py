@@ -280,6 +280,50 @@ class EventRecorder:
                 raise
             logger.warning("EventRecorder failed to dispatch batch of %d events: %s", len(events), exc)
 
+    async def record_async(self, event: FlowEvent) -> None:
+        """Asynchronously dispatch a single FlowEvent to the underlying transport."""
+        try:
+            if hasattr(self._transport, "send_async"):
+                await self._transport.send_async(event)
+            else:
+                import asyncio
+
+                await asyncio.to_thread(self._transport.send, event)
+        except Exception as exc:
+            if self.strict:
+                raise
+            logger.warning("EventRecorder failed to asynchronously dispatch event %s: %s", event.event_id, exc)
+
+    async def record_batch_async(self, events: Sequence[FlowEvent]) -> None:
+        """Asynchronously dispatch a sequence of FlowEvents to the underlying transport."""
+        try:
+            if hasattr(self._transport, "send_batch_async"):
+                await self._transport.send_batch_async(events)
+            else:
+                import asyncio
+
+                await asyncio.to_thread(self._transport.send_batch, events)
+        except Exception as exc:
+            if self.strict:
+                raise
+            logger.warning("EventRecorder failed to asynchronously dispatch batch of %d events: %s", len(events), exc)
+
+    def flush(self, timeout: float | None = None) -> bool:
+        """Flush the underlying transport if it supports flushing.
+
+        Returns True if the flush succeeded or was a no-op, False if it timed out or failed.
+        """
+        if hasattr(self._transport, "flush"):
+            try:
+                res = self._transport.flush(timeout=timeout)
+                return True if res is None else bool(res)
+            except Exception as exc:
+                if self.strict:
+                    raise
+                logger.warning("EventRecorder transport flush failed: %s", exc)
+                return False
+        return True
+
     def start_operation(
         self,
         *,

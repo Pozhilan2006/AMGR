@@ -1,12 +1,17 @@
 from collections.abc import Sequence
+import asyncio
+import random
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from typing import Any
 
 from amgr_sdk.config import AMGRConfig
+from amgr_sdk.exceptions import ConfigurationError
 from amgr_sdk.models.events import FlowEvent
 from amgr_sdk.transport.base import (
+    AsyncTransport,
     BatchTransportError,
     Transport,
     TransportConnectionError,
@@ -17,12 +22,17 @@ from amgr_sdk.transport.base import (
 TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504})
 
 
-class HttpTransport(Transport):
-    """HTTP client dispatching FlowEvent payloads to the AMGR ingestion endpoint."""
+class HttpTransport(Transport, AsyncTransport):
+    """HTTP client dispatching FlowEvent payloads to the AMGR ingestion endpoint.
+
+    Supports both synchronous ('send', 'send_batch') and asynchronous ('send_async',
+    'send_batch_async') dispatch without external third-party HTTP dependencies.
+    """
 
     def __init__(self, config: AMGRConfig | None = None) -> None:
         self.config = config or AMGRConfig.from_env()
         self._endpoint_url = self._resolve_endpoint_url(self.config.api_base_url)
+        self._validate_endpoint_url(self._endpoint_url)
 
     @property
     def endpoint_url(self) -> str:
@@ -37,6 +47,23 @@ class HttpTransport(Transport):
         if cleaned.endswith("/api/v1"):
             return f"{cleaned}/flow-events"
         return f"{cleaned}/api/v1/flow-events"
+
+    @staticmethod
+    def _validate_endpoint_url(url: str) -> None:
+        """Ensure remote endpoints enforce HTTPS, permitting HTTP only for local development."""
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+
+        is_local = (
+            hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver")
+            or hostname.endswith(".local")
+        )
+        if scheme == "http" and not is_local:
+            raise ConfigurationError(
+                f"Insecure HTTP scheme is not permitted for remote endpoint '{hostname}'. "
+                "HTTPS is strictly required for remote event delivery."
+            )
 
     def _build_request(self, payload_bytes: bytes) -> urllib.request.Request:
         headers = {
@@ -107,6 +134,8 @@ class HttpTransport(Transport):
 
             # Backoff before next attempt
             backoff_delay = self.config.retry_backoff_seconds * (2 ** attempt)
+            if getattr(self.config, "backoff_jitter", False):
+                backoff_delay = random.uniform(0.5 * backoff_delay, 1.5 * backoff_delay)
             time.sleep(backoff_delay)
 
         if last_error is not None:
@@ -136,3 +165,15 @@ class HttpTransport(Transport):
                     remaining_events=remaining,
                     cause=err,
                 ) from err
+    async def send_async(self, event: FlowEvent) -> None:
+        """Asynchronously send a single FlowEvent to the backend."""
+        return await asyncio.to_thread(self.send, event)
+
+    async def send_batch_async(self, events: Sequence[FlowEvent]) -> None:
+        """Asynchronously dispatch a sequence of FlowEvents to the backend."""
+        return await asyncio.to_thread(self.send_batch, events)
+
+    # Standard async aliases
+    asend = send_async
+    asend_batch = send_batch_async
+
