@@ -7,6 +7,7 @@ and provides application factory with dependency injection.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 from fastapi import FastAPI
@@ -29,6 +30,9 @@ from backend.app.services.approval_service import ApprovalService
 from backend.app.services.authorization_service import AuthorizationService
 from backend.app.services.policy_service import PolicyService
 
+# Placeholder to satisfy circular import from backend/app/__init__.py during startup
+app: FastAPI | None = None
+
 
 def create_app(
     policy_repo: PolicyRepository | None = None,
@@ -41,14 +45,14 @@ def create_app(
 
     Allows injecting custom or mock repository and service instances for tests.
     """
-    app = FastAPI(
+    app_instance = FastAPI(
         title="AMGR Control Plane",
         description="Autonomous Multi-Agent Governance Runtime Control Plane & Policy Enforcement API",
         version="0.1.0",
     )
 
     # Configure CORS for local development & dashboard integration
-    app.add_middleware(
+    app_instance.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=True,
@@ -58,36 +62,47 @@ def create_app(
 
     # Dependency overrides if custom instances were provided
     if policy_repo is not None:
-        app.dependency_overrides[get_policy_repository] = lambda: policy_repo
+        app_instance.dependency_overrides[get_policy_repository] = lambda: policy_repo
     if approval_service is not None:
-        app.dependency_overrides[get_approval_service] = lambda: approval_service
+        app_instance.dependency_overrides[get_approval_service] = lambda: approval_service
     if auth_service is not None:
-        app.dependency_overrides[get_authorization_service] = lambda: auth_service
+        app_instance.dependency_overrides[get_authorization_service] = lambda: auth_service
     if policy_service is not None:
-        app.dependency_overrides[get_policy_service] = lambda: policy_service
+        app_instance.dependency_overrides[get_policy_service] = lambda: policy_service
     if decision_repo is not None:
-        app.dependency_overrides[get_decision_repository] = lambda: decision_repo
+        app_instance.dependency_overrides[get_decision_repository] = lambda: decision_repo
 
     # Health check endpoints
-    @app.get("/health", tags=["system"])
-    @app.get("/api/v1/health", tags=["system"])
+    @app_instance.get("/health", tags=["system"])
+    @app_instance.get("/api/v1/health", tags=["system"])
     def health_check() -> dict[str, str]:
         return {"status": "ok"}
 
     # Include authorization router under configured prefix and at root for flexibility
     api_prefix = os.environ.get("API_V1_PREFIX", "/api/v1").rstrip("/")
-    app.include_router(authorization_router, prefix=api_prefix)
+    app_instance.include_router(authorization_router, prefix=api_prefix)
     if api_prefix != "":
         # Also mount router without prefix for direct route compatibility
-        app.include_router(authorization_router)
+        app_instance.include_router(authorization_router)
 
-    # Include policies router under configured prefix and at root for flexibility
-    app.include_router(policies_router, prefix=f"{api_prefix}/policies")
+    # Mount central API router under configured prefix (with strict two-way module resolution)
+    try:
+        from backend.app.api.router import api_router
+    except ImportError:
+        from app.api.router import api_router
+
+    app_instance.include_router(api_router, prefix=api_prefix)
+
+    # Also mount policies router without prefix for direct root route compatibility
     if api_prefix != "":
-        app.include_router(policies_router, prefix="/policies")
+        app_instance.include_router(policies_router, prefix="/policies")
 
-    return app
+    return app_instance
 
 
 # Default application instance
 app = create_app()
+
+# Update package-level attribute if app was imported during initialization
+if "app" in sys.modules and hasattr(sys.modules["app"], "app"):
+    sys.modules["app"].app = app
