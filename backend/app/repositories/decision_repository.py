@@ -85,13 +85,18 @@ class DecisionRepository:
             "evaluated_at": decision.evaluated_at,
         }
 
-        self._decisions.append(record_data)
-
         if self.db_session is not None:
-            model = PolicyDecisionModel(**record_data)
-            self.db_session.add(model)
-            self.db_session.commit()
+            try:
+                model = PolicyDecisionModel(**record_data)
+                self.db_session.add(model)
+                self.db_session.commit()
+            except Exception as exc:
+                self.db_session.rollback()
+                raise RuntimeError(
+                    f"Failed to persist decision to database: {exc}"
+                ) from exc
 
+        self._decisions.append(record_data)
         return decision_id
 
     def get_decision(self, decision_id: str) -> dict[str, Any] | None:

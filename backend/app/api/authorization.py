@@ -12,6 +12,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from backend.app.repositories.policy_repository import PolicyRepository
+from backend.app.schemas.adapter import (
+    PolicyIdCompatibilityError,
+    SDKAuthorizationDecision,
+    SDKAuthorizationRequest,
+    convert_backend_decision_to_sdk,
+    convert_sdk_request_to_backend,
+)
 from backend.app.schemas.approval import (
     ApprovalDecisionSubmission,
     ApprovalRequest,
@@ -98,10 +105,63 @@ def authorize(
     - Automatically creates a pending ApprovalRequest if REQUIRE_APPROVAL is rendered.
     - Returns deterministic AuthorizationDecision.
     """
-    decision, appr_req = service.authorize(request)
-    if appr_req is not None:
-        response.headers["X-AMGR-Approval-ID"] = appr_req.id
-    return decision
+    try:
+        decision, appr_req = service.authorize(request)
+        if appr_req is not None:
+            response.headers["X-AMGR-Approval-ID"] = appr_req.id
+        return decision
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authorization evaluation failed safely.",
+        ) from exc
+
+
+@router.post(
+    "/enforcement/authorize",
+    response_model=SDKAuthorizationDecision,
+    status_code=status.HTTP_200_OK,
+    summary="SDK-compatible runtime authorization enforcement endpoint",
+)
+def enforcement_authorize(
+    request: SDKAuthorizationRequest,
+    response: Response,
+    service: AuthorizationService = Depends(get_authorization_service),
+) -> SDKAuthorizationDecision:
+    """Evaluates an SDK-compatible authorization request at the runtime enforcement boundary.
+
+    - Accepts SDKAuthorizationRequest matching Member 1 SDK contract.
+    - Deterministically adapts request to canonical AuthorizationRequest.
+    - Evaluates against active policies via AuthorizationService.
+    - Persists decision and enforces transactional integrity.
+    - Generates pending ApprovalRequest on REQUIRE_APPROVAL and sets X-AMGR-Approval-ID header.
+    - Maps decision to SDKAuthorizationDecision with strict policy ID fidelity.
+    - Fails safely on errors without leaking internals or returning synthetic ALLOW.
+    """
+    try:
+        canonical_req = convert_sdk_request_to_backend(request)
+        decision, appr_req = service.authorize(canonical_req)
+        if appr_req is not None:
+            response.headers["X-AMGR-Approval-ID"] = appr_req.id
+        return convert_backend_decision_to_sdk(
+            decision=decision,
+            request_id=request.request_id,
+        )
+    except HTTPException:
+        raise
+    except PolicyIdCompatibilityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Policy-ID contract incompatibility: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authorization evaluation failed safely.",
+        ) from exc
+
 
 
 @router.get(

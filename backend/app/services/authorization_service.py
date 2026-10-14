@@ -226,6 +226,11 @@ class AuthorizationService:
                 missing_attributes=raw_decision.missing_attributes,
                 evaluated_at=raw_decision.evaluated_at,
             )
-            return self._complete(request, enriched_decision, appr_req)
+            try:
+                return self._complete(request, enriched_decision, appr_req)
+            except Exception:
+                if hasattr(self.approval_service, "_requests"):
+                    self.approval_service._requests.pop(appr_req.id, None)
+                raise
 
         return self._complete(request, raw_decision, None)
