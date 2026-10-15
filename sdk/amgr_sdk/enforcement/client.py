@@ -48,13 +48,6 @@ class AuthorizationClient(Protocol):
     def authorize(self, request: AuthorizationRequest) -> AuthorizationDecision:
         """Evaluate an authorization request and return the deterministic policy decision."""
         ...
-class AuthorizationDecision(BaseModel):
-    decision_id: UUID = Field(default_factory=uuid4)
-    request_id: UUID
-    outcome: Literal["allow", "deny", "review"]
-    reason: str
-    policy_ids: list[str] = Field(default_factory=list)
-    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class HttpAuthorizationClient(AuthorizationClient):

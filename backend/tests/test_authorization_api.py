@@ -888,7 +888,76 @@ class TestMultiPolicyAndRouting(unittest.TestCase):
         self.assertEqual(resp_approved.status_code, 200)
         self.assertFalse(any(a["id"] == appr_id for a in resp_approved.json()))
 
+    def test_no_duplicate_operation_id_warnings_in_openapi(self) -> None:
+        """Verifies OpenAPI schema generation is free of duplicate operation ID warnings and /approvals schema is authoritative."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as recorded_warnings:
+            warnings.simplefilter("always")
+            schema = self.app.openapi()
+
+        duplicate_warnings = [
+            w for w in recorded_warnings if "Duplicate Operation ID" in str(w.message)
+        ]
+        self.assertEqual(
+            len(duplicate_warnings),
+            0,
+            f"Expected 0 duplicate operation ID warnings, found {len(duplicate_warnings)}: {[str(w.message) for w in duplicate_warnings]}",
+        )
+
+        # Verify /api/v1/approvals schema reflects the canonical endpoint with query parameters and response schema
+        approvals_path = schema.get("paths", {}).get("/api/v1/approvals", {})
+        self.assertIn("get", approvals_path)
+        get_meta = approvals_path["get"]
+        self.assertEqual(get_meta.get("summary"), "List governance approval requests")
+        self.assertEqual(get_meta.get("operationId"), "list_approvals_api_v1_approvals_get")
+        parameters = [p["name"] for p in get_meta.get("parameters", [])]
+        self.assertIn("status", parameters)
+        self.assertIn("trace_id", parameters)
+        self.assertIn("policy_id", parameters)
+
+    def test_authorization_decisions_compatibility_endpoint(self) -> None:
+        """Verifies /api/v1/authorization/decisions acts as a working endpoint without returning 501."""
+        auth_req = {
+            "trace_id": "trc_decisions_compat",
+            "subject": "service_agent",
+            "action": "execute_tool",
+            "resource": "resource_abc",
+        }
+        self.policy_repo.create_policy(
+            PolicyCreate(
+                id="pol_compat_allow",
+                name="Allow tool execution",
+                priority=10,
+                rules=[
+                    RuleDefinition(
+                        id="r_allow",
+                        name="Allow tool",
+                        condition=ConditionRule(
+                            field="action",
+                            operator=ConditionOperator.EQ,
+                            value="execute_tool",
+                        ),
+                        effect=PolicyEffect.ALLOW,
+                    )
+                ],
+            )
+        )
+        resp = self.client.post("/api/v1/authorization/decisions", json_data=auth_req)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["decision"], "ALLOW")
+        self.assertEqual(data["policy_id"], "pol_compat_allow")
+
+    def test_approvals_module_router_export(self) -> None:
+        """Verifies backend.app.api.routes.approvals exports an APIRouter for backwards compatibility."""
+        from fastapi import APIRouter
+        from backend.app.api.routes.approvals import router as approvals_router
+
+        self.assertIsInstance(approvals_router, APIRouter)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
