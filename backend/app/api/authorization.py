@@ -113,6 +113,12 @@ router = APIRouter(tags=["authorization"])
     status_code=status.HTTP_200_OK,
     summary="Evaluate runtime authorization request against governance policies",
 )
+@router.post(
+    "/authorization",
+    response_model=AuthorizationDecision,
+    status_code=status.HTTP_200_OK,
+    summary="Evaluate runtime authorization request against governance policies (alias)",
+)
 def authorize(
     request: AuthorizationRequest,
     response: Response,
