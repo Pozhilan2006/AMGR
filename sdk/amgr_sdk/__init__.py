@@ -1,16 +1,138 @@
 """Public AMGR SDK interfaces."""
 
-from amgr_sdk.client import AMGRClient
+from amgr_sdk.capture.decorators import (
+    agent_span,
+    capture,
+    capture_agent,
+    capture_span,
+    capture_tool,
+    tool_span,
+)
+from amgr_sdk.capture.recorder import ActiveOperation, EventRecorder
+from amgr_sdk.client import AMGRClient, get_default_client, set_default_client
 from amgr_sdk.config import AMGRConfig
-from amgr_sdk.context import FlowContext, current_flow_context, flow_context
-from amgr_sdk.models.events import ComponentRef, FlowEvent
+from amgr_sdk.context import (
+    HEADER_CORRELATION_ID,
+    HEADER_FLOW_ID,
+    HEADER_PARENT_EVENT_ID,
+    FlowContext,
+    current_flow_context,
+    export_context,
+    extract_context,
+    import_context,
+    flow,
+    flow_context,
+    inject_context,
+    reset_flow_context,
+    restore_context,
+    set_flow_context,
+)
+from amgr_sdk.delivery import DeliveryMetrics, DeliveryPipeline, EventQueue, QueuedTransport
+from amgr_sdk.exceptions import (
+    AMGRError,
+    CaptureError,
+    ConfigurationError,
+    IntegrationError,
+)
+from amgr_sdk.integrations.database import (
+    AMGRInstrumentedConnection,
+    AMGRInstrumentedCursor,
+    capture_db,
+    classify_sql_operation,
+    db_span,
+    derive_database_ref,
+    instrument_dbapi_connection,
+    instrument_sqlalchemy_engine,
+    sanitize_database_url,
+)
+from amgr_sdk.integrations.http import (
+    capture_http,
+    derive_service_ref,
+    http_span,
+    instrument_httpx_client,
+    instrument_requests_session,
+    instrumented_urlopen,
+    normalize_url,
+)
+
+from amgr_sdk.models.events import (
+    DISALLOWED_METADATA_KEYS,
+    STANDARD_COMPONENT_TYPES,
+    STANDARD_EVENT_STATUSES,
+    ComponentRef,
+    FlowEvent,
+    sanitize_metadata,
+)
+from amgr_sdk.transport.base import (
+    AsyncTransport,
+    BatchTransportError,
+    Transport,
+    TransportConnectionError,
+    TransportError,
+)
+from amgr_sdk.transport.http import HttpTransport
 
 __all__ = [
     "AMGRClient",
     "AMGRConfig",
+    "AsyncTransport",
+    "AMGRError",
+    "AMGRInstrumentedConnection",
+    "AMGRInstrumentedCursor",
+    "ActiveOperation",
+    "BatchTransportError",
+    "CaptureError",
     "ComponentRef",
+    "ConfigurationError",
+    "DeliveryMetrics",
+    "DeliveryPipeline",
+    "EventQueue",
+    "QueuedTransport",
+    "DISALLOWED_METADATA_KEYS",
+    "EventRecorder",
     "FlowContext",
     "FlowEvent",
+    "HEADER_CORRELATION_ID",
+    "HEADER_FLOW_ID",
+    "HEADER_PARENT_EVENT_ID",
+    "HttpTransport",
+    "IntegrationError",
+    "STANDARD_COMPONENT_TYPES",
+    "STANDARD_EVENT_STATUSES",
+    "Transport",
+    "TransportConnectionError",
+    "TransportError",
+    "agent_span",
+    "capture",
+    "capture_agent",
+    "capture_db",
+    "capture_http",
+    "capture_span",
+    "capture_tool",
+    "classify_sql_operation",
     "current_flow_context",
+    "db_span",
+    "derive_database_ref",
+    "derive_service_ref",
+    "export_context",
+    "extract_context",
+    "flow",
     "flow_context",
+    "import_context",
+    "get_default_client",
+    "http_span",
+    "inject_context",
+    "instrument_dbapi_connection",
+    "instrument_httpx_client",
+    "instrument_requests_session",
+    "instrument_sqlalchemy_engine",
+    "instrumented_urlopen",
+    "normalize_url",
+    "reset_flow_context",
+    "restore_context",
+    "sanitize_database_url",
+    "sanitize_metadata",
+    "set_default_client",
+    "set_flow_context",
+    "tool_span",
 ]

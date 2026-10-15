@@ -1,4 +1,4 @@
-from uuid import UUID
+﻿from uuid import UUID
 
 from app.ai_operator.schemas import OperatorScope
 from app.repositories.lineage_repository import LineageRepository
@@ -7,6 +7,7 @@ from app.schemas.lineage import (
     LineageDirection,
     LineageEdge,
     LineageNode,
+    LineageRecordView,
     LineageResponse,
     LineageTraversal,
 )
@@ -73,6 +74,7 @@ class LineageService:
                 next_frontier: list[FlowEvent] = []
                 for candidate in candidates:
                     if candidate.event_id in visited[item]:
+                        truncation_reasons.add("cycle_detected")
                         continue
                     if candidate.event_id not in events and len(events) >= limit:
                         truncation_reasons.add("result_limit")
@@ -205,8 +207,8 @@ class LineageService:
         if offset < 0:
             raise ValueError("offset must be nonnegative.")
 
-    @staticmethod
     def _response(
+        self,
         events: list[FlowEvent],
         *,
         scope: OperatorScope,
@@ -221,6 +223,9 @@ class LineageService:
         nodes: dict[tuple[str, str], LineageNode] = {}
         edges: list[LineageEdge] = []
         event_ids = {event.event_id for event in events}
+        lineage_records: list[LineageRecordView] = self._repository.list_lineage_records(
+            list(event_ids), scope
+        )
 
         for event in events:
             event_id = str(event.event_id)
@@ -267,14 +272,19 @@ class LineageService:
 
         normalized_reasons = sorted(
             truncation_reasons,
-            key=("depth_limit", "result_limit", "page_limit").index,
+            key=("cycle_detected", "depth_limit", "result_limit", "page_limit").index,
         )
         return LineageResponse(
             events=events,
+            lineage_records=lineage_records,
             nodes=list(nodes.values()),
             edges=edges,
             unresolved_parent_event_ids=sorted(map(str, unresolved_parent_ids)),
-            completeness="incomplete" if unresolved_parent_ids or normalized_reasons else "unknown",
+            completeness=(
+                "incomplete"
+                if unresolved_parent_ids or normalized_reasons
+                else "complete"
+            ),
             truncated=bool(normalized_reasons),
             truncation_reasons=normalized_reasons,
             traversal=LineageTraversal(

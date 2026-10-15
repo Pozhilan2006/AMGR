@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.ai_operator.schemas import OperatorScope
 from app.models.flow_event import FlowEventRecord
+from app.models.lineage_record import LineageRecord as LineageRecordModel
 from app.schemas.flow_event import ComponentRef, FlowEvent
+from app.schemas.lineage import LineageRecordView
 
 
 class LineageRepository:
@@ -113,6 +115,53 @@ class LineageRepository:
         ).all()
         return [self._to_schema(record) for record in records]
 
+    def list_lineage_records(
+        self,
+        event_ids: Sequence[UUID],
+        scope: OperatorScope,
+    ) -> list[LineageRecordView]:
+        """Return only evidence records for the requested events and exact scope."""
+        if not event_ids:
+            return []
+        records = self._session.scalars(
+            select(LineageRecordModel)
+            .where(
+                LineageRecordModel.originating_event_id.in_(event_ids),
+                LineageRecordModel.application_id == scope.application_id,
+                LineageRecordModel.environment == scope.environment,
+            )
+            .order_by(LineageRecordModel.recorded_at, LineageRecordModel.record_id)
+        ).all()
+        result: list[LineageRecordView] = []
+        for record in records:
+            metadata = {
+                key: value
+                for key, value in (record.transformation_metadata or {}).items()
+                if not (isinstance(key, str) and key.startswith("_"))
+            }
+            result.append(
+                LineageRecordView.model_validate(
+                    {
+                        "record_id": record.record_id,
+                        "flow_id": record.flow_id,
+                        "application_id": record.application_id,
+                        "environment": record.environment,
+                        "originating_event_id": record.originating_event_id,
+                        "parent_event_id": record.parent_event_id,
+                        "source_node_id": record.source_node_id,
+                        "destination_node_id": record.destination_node_id,
+                        "lineage_classification": record.lineage_classification,
+                        "evidence_source": record.evidence_source,
+                        "action": record.action,
+                        "data_labels": list(record.data_labels or []),
+                        "transformation_metadata": metadata,
+                        "depth": record.depth,
+                        "recorded_at": record.recorded_at,
+                    }
+                )
+            )
+        return result
+
     def save_event(self, event: FlowEvent) -> bool:
         existing = self._session.scalar(
             select(FlowEventRecord).where(
@@ -169,13 +218,21 @@ class LineageRepository:
         timestamp = record.timestamp
         if timestamp.utcoffset() is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
+        metadata = dict(record.event_metadata or {})
+        parent_event_id = record.parent_event_id
+        if parent_event_id is None and metadata.get("_unresolved_parent_id") is not None:
+            try:
+                parent_event_id = UUID(str(metadata["_unresolved_parent_id"]))
+            except (ValueError, TypeError, AttributeError):
+                parent_event_id = None
+        metadata = {key: value for key, value in metadata.items() if not str(key).startswith("_")}
         return FlowEvent(
             event_id=record.event_id,
             application_id=record.application_id,
             environment=record.environment,
             flow_id=record.flow_id,
             correlation_id=record.correlation_id,
-            parent_event_id=record.parent_event_id,
+            parent_event_id=parent_event_id,
             timestamp=timestamp,
             source=ComponentRef(
                 component_id=record.source_component_id,
@@ -189,7 +246,7 @@ class LineageRepository:
             ),
             action=record.action,
             data_labels=record.data_labels,
-            metadata=record.metadata_json,
+            metadata=metadata,
             status=record.status,
             duration_ms=record.duration_ms,
         )

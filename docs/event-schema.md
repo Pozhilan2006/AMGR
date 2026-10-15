@@ -1,35 +1,57 @@
 # Shared event schema
 
-## Event contract
+The SDK and backend use the same strict `FlowEvent` contract. Unknown top-level
+fields are rejected. Scope is required on each event and must be configured by the
+instrumentation owner and authorized by backend identity middleware.
 
-The shared event contract is a typed `FlowEvent` model used by the SDK and backend validation layer.
+| Field | Type | Required / default | Meaning |
+| --- | --- | --- | --- |
+| `event_id` | UUID | Generated with `uuid4` | Event identity; deduplicated within application and environment. |
+| `application_id` | string, 1–200 chars | Required | Authorized application boundary. |
+| `environment` | string, 1–100 chars | Required | Deployment environment. |
+| `flow_id` | UUID | Required | Runtime flow or execution tree identifier. |
+| `correlation_id` | UUID or `null` | Optional | Related request or session identifier. |
+| `parent_event_id` | UUID or `null` | Optional | Explicit initiating event, when known. |
+| `timestamp` | timezone-aware datetime | Current UTC time | Time the event occurred; normalized to UTC. |
+| `source` | `ComponentRef` | Required | Component that initiated the interaction. |
+| `destination` | `ComponentRef` | Required | Component that received the interaction. |
+| `action` | string, 1–500 chars | Required | Operation label, such as `model.inference`. |
+| `data_labels` | list of strings | `[]` | Caller-supplied sensitivity or data labels. |
+| `metadata` | string-keyed object | `{}` | Safe operational metadata; secrets and raw prompts/payloads must be redacted. |
+| `status` | string, 1–100 chars | `observed` | Event status, such as `completed`, `failed`, or `blocked`. |
+| `duration_ms` | nonnegative number or `null` | `null` | Measured operation duration, when available. |
 
-Required fields:
+`ComponentRef` contains `component_id` (1–200 chars), `component_type` (1–100
+chars), and optional `name` (up to 200 chars). The SDK also provides factories for
+common types such as agents, models, tools, services, APIs, and databases.
 
-- `event_id`: unique identifier for this event.
-- `application_id` and `environment`: required tenant/environment scope assigned by the trusted instrumentation configuration.
-- `flow_id`: correlation key for the runtime flow as a whole.
-- `correlation_id`: optional correlated request or session identifier.
-- `parent_event_id`: optional reference to the initiating event.
-- `timestamp`: UTC timestamp with timezone information.
-- `source`: `ComponentRef` describing the origin component.
-- `destination`: `ComponentRef` describing the target component.
-- `action`: operation or event label carried by the event.
-- `data_labels`: list of classification labels that describe sensitivity or data properties.
-- `metadata`: free-form metadata for extension and observability.
-- `status`: business or processing status, such as `observed` or `blocked`.
-- `duration_ms`: optional measured duration in milliseconds.
+## Scope configuration
 
-`data_labels` is preserved as captured; the event schema does not identify these labels as input or output labels. `metadata` is opaque extension data: transformation metadata may be retained there only when instrumentation supplies it, but the backend does not interpret or derive transformations. Events must include a scope authorized by backend identity middleware before ingestion.
+Set `AMGR_APPLICATION_ID` and `AMGR_ENVIRONMENT` together when using the default
+SDK client. They are copied into captured events; the SDK does not invent a scope.
+When constructing an `EventRecorder` directly, pass both values explicitly. The
+backend compares the event scope with the trusted identity on the request and
+rejects unauthorized scopes.
 
-## `ComponentRef`
+## Lineage and event persistence
 
-`ComponentRef` captures identity and type for runtime nodes. It includes:
+Events with the same `(event_id, application_id, environment)` are idempotent only
+when their contract fields match. Reusing that scoped ID with different content
+returns a conflict. Parent links are accepted only within the same scope and flow.
+If a referenced parent has not arrived, AMGR preserves the explicit unresolved
+parent ID and marks its lineage `unknown_or_incomplete`; it links the event after
+the parent arrives. It never infers parentage from timestamps or graph adjacency.
 
-- `component_id`: stable identifier for the component
-- `component_type`: category such as agent, model, api, db, or tool
-- `name`: optional human-readable name
+Metadata is sanitized at the SDK boundary and checked again by the backend. Keys
+for credentials, secrets, raw prompts, and payload bodies must be omitted or have
+their values replaced with `[REDACTED]`. Metadata is not a place to store event
+payloads or database records. Data labels and transformations are retained only
+when instrumentation supplies them; the backend does not fabricate either.
 
-## Compatibility guideline
+## Capture
 
-The SDK and backend share the same contract semantics, but each may own separate objects internally. The goal is compatibility without code generation: shared field names, clear typing, and explicit versioning when a contract changes.
+`@capture`, `capture_span`, and `EventRecorder` preserve `flow_id`,
+`correlation_id`, and `parent_event_id` through the SDK's ambient flow context.
+Each captured event still requires an explicitly configured application and
+environment scope. If context or scope is unavailable, the SDK surfaces that
+configuration error instead of assigning a made-up value.

@@ -4,9 +4,12 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import resolve_request_scope
 from app.db.session import get_db
-from app.repositories.lineage_repository import LineageRepository
 from app.schemas.flow_event import FlowEvent, FlowEventIngestResponse
-from app.services.event_ingestion import EventIngestionService
+from app.services.event_ingestion import (
+    EventIngestionService,
+    EventPayloadConflictError,
+    InvalidParentEventError,
+)
 
 router = APIRouter()
 
@@ -18,21 +21,41 @@ def ingest_flow_event(
     response: Response,
     session: Session = Depends(get_db),
 ) -> FlowEventIngestResponse:
-    resolve_request_scope(request, event.application_id, event.environment)
-    service = EventIngestionService(LineageRepository(session))
+    """Persist one authorized event and update its observed graph and lineage."""
+    scope = resolve_request_scope(request, event.application_id, event.environment)
+    service = EventIngestionService()
     try:
-        created = service.ingest(event)
-    except ValueError as exc:
+        with session.begin():
+            result = service.ingest(
+                session,
+                event,
+                application_id=scope.application_id,
+                environment=scope.environment,
+            )
+    except InvalidParentEventError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "INVALID_PARENT_REFERENCE", "message": exc.message},
+        ) from exc
+    except EventPayloadConflictError as exc:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="An event with this ID already exists with different content.",
+            detail={"code": exc.code, "message": exc.message, "event_id": str(exc.event_id)},
         ) from exc
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="The event could not be recorded because its ID is already in use.",
+            detail="The event could not be recorded because its ID or graph identity is already in use.",
         ) from exc
-    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-    return FlowEventIngestResponse(event_id=event.event_id, duplicate=not created)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    response.status_code = status.HTTP_200_OK if result.duplicate else status.HTTP_201_CREATED
+    return result
