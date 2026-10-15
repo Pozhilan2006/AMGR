@@ -3,6 +3,7 @@
 Manages pending human approval requests, verifies human authority,
 enforces single-decision finality, guards against policy version drift,
 and strictly prevents automated AI/LLM overrides following the Member 3 roadmap.
+Supports both SQLAlchemy relational database persistence and in-memory operation.
 """
 
 from __future__ import annotations
@@ -10,6 +11,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
+from sqlalchemy.orm import Session
+
+from backend.app.repositories.approval_repository import (
+    ApprovalPersistenceError,
+    ApprovalRepository,
+)
 from backend.app.repositories.policy_repository import PolicyRepository
 from backend.app.schemas.approval import (
     ApprovalDecisionSubmission,
@@ -25,7 +32,7 @@ from backend.app.schemas.policy_enums import PolicyEffect
 
 
 class ApprovalService:
-    """In-memory service managing human approval requests and authorization safety.
+    """Service managing human approval requests and authorization safety.
 
     Guarantees:
     - Only REQUIRE_APPROVAL decisions can initiate an approval workflow.
@@ -35,21 +42,37 @@ class ApprovalService:
     - An already finalized approval cannot be overwritten or contradicted.
     - Stale approvals are invalidated if the underlying policy revision changes.
     - Time-based expiration and TTL execution validity window enforcement.
+    - Supports both database-backed durable persistence and in-memory test isolation.
     """
 
     def __init__(
         self,
+        repository: ApprovalRepository | None = None,
+        db_session: Session | None = None,
         allowed_approvers: Sequence[str] | set[str] | None = None,
         default_ttl_seconds: int | None = None,
     ) -> None:
-        # Maps approval_id -> ApprovalRequest
-        self._requests: dict[str, ApprovalRequest] = {}
+        if repository is not None:
+            self.repository = repository
+        else:
+            self.repository = ApprovalRepository(db_session=db_session)
+
+        # Expose self._requests for direct access and backward compatibility
+        self._requests: dict[str, ApprovalRequest] = self.repository._requests
         # Optional whitelist of authorized human reviewer identities
         self._allowed_approvers: set[str] | None = (
             set(allowed_approvers) if allowed_approvers is not None else None
         )
         self._default_ttl_seconds = default_ttl_seconds
-        self._counter: int = 0
+
+        # Sync counter from existing requests in repository
+        max_id = 0
+        for k in self._requests.keys():
+            if k.startswith("appr_"):
+                suffix = k[5:]
+                if suffix.isdigit():
+                    max_id = max(max_id, int(suffix))
+        self._counter: int = max_id
 
     def create_approval_request(
         self,
@@ -102,7 +125,7 @@ class ApprovalService:
             final_effect=PolicyEffect.REQUIRE_APPROVAL,
         )
 
-        self._requests[approval_id] = req
+        self.repository.save(req)
         return req
 
     def submit_decision(
@@ -119,10 +142,10 @@ class ApprovalService:
             ValueError: If the request is already finalized, expired, or if policy revision drift is detected.
             PermissionError: If actor is unauthorized or represents an automated AI/LLM entity.
         """
-        if approval_id not in self._requests:
+        req = self.repository.get(approval_id)
+        if req is None:
             raise KeyError(f"Approval request '{approval_id}' not found.")
 
-        req = self._requests[approval_id]
         current_time = now if now is not None else datetime.now(timezone.utc)
 
         # 0. Check time-based expiration
@@ -148,7 +171,7 @@ class ApprovalService:
                     ),
                     final_effect=PolicyEffect.BLOCK,
                 )
-                self._requests[approval_id] = expired_req
+                self.repository.save(expired_req)
             raise ValueError(
                 f"Approval request '{approval_id}' has expired and can no longer be decided."
             )
@@ -197,7 +220,7 @@ class ApprovalService:
                     decision_reason=f"Policy '{req.policy_id}' was deleted; approval invalidated.",
                     final_effect=PolicyEffect.BLOCK,
                 )
-                self._requests[approval_id] = expired_req
+                self.repository.save(expired_req)
                 raise ValueError(
                     f"Policy '{req.policy_id}' no longer exists; approval request has been expired and blocked."
                 )
@@ -222,7 +245,7 @@ class ApprovalService:
                     ),
                     final_effect=PolicyEffect.BLOCK,
                 )
-                self._requests[approval_id] = expired_req
+                self.repository.save(expired_req)
                 raise ValueError(
                     f"Policy '{req.policy_id}' revision changed (v{req.policy_version} -> v{current_policy.version}) "
                     "before approval decision. Approval request has been invalidated."
@@ -253,7 +276,7 @@ class ApprovalService:
             final_effect=new_effect,
         )
 
-        self._requests[approval_id] = final_req
+        self.repository.save(final_req)
         return final_req
 
     def cancel_approval(
@@ -270,10 +293,10 @@ class ApprovalService:
             ValueError: If the request is already in a terminal state (REJECTED or EXPIRED).
             PermissionError: If actor represents an automated AI/LLM entity.
         """
-        if approval_id not in self._requests:
+        req = self.repository.get(approval_id)
+        if req is None:
             raise KeyError(f"Approval request '{approval_id}' not found.")
 
-        req = self._requests[approval_id]
         if req.status in (ApprovalStatus.REJECTED, ApprovalStatus.EXPIRED):
             raise ValueError(
                 f"Approval request '{approval_id}' is already finalized with status '{req.status.value}'."
@@ -301,17 +324,17 @@ class ApprovalService:
             decision_reason=reason or f"Cancelled by {actor}.",
             final_effect=PolicyEffect.BLOCK,
         )
-        self._requests[approval_id] = cancelled
+        self.repository.save(cancelled)
         return cancelled
 
     def expire_stale_requests(self, now: datetime | None = None) -> list[str]:
         """Scans all approval requests and transitions stale pending/approved requests to EXPIRED."""
         current_time = now if now is not None else datetime.now(timezone.utc)
         expired_ids: list[str] = []
-        for approval_id, req in list(self._requests.items()):
+        for req in self.repository.list_all():
             if req.status in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED):
                 if req.expires_at is not None and current_time >= req.expires_at:
-                    self._requests[approval_id] = ApprovalRequest(
+                    expired_req = ApprovalRequest(
                         id=req.id,
                         trace_id=req.trace_id,
                         policy_id=req.policy_id,
@@ -327,7 +350,8 @@ class ApprovalService:
                         decision_reason="Request exceeded configured TTL without resolution.",
                         final_effect=PolicyEffect.BLOCK,
                     )
-                    expired_ids.append(approval_id)
+                    self.repository.save(expired_req)
+                    expired_ids.append(req.id)
         return expired_ids
 
     def can_proceed(
@@ -345,10 +369,10 @@ class ApprovalService:
         - Expired execution validity window (TTL)
         - Any policy revision mismatch or deactivated policy
         """
-        if approval_id not in self._requests:
+        req = self.repository.get(approval_id)
+        if req is None:
             return False
 
-        req = self._requests[approval_id]
         current_time = now if now is not None else datetime.now(timezone.utc)
 
         # Check time-based expiration
@@ -370,7 +394,7 @@ class ApprovalService:
                     decision_reason="Approval request execution window expired.",
                     final_effect=PolicyEffect.BLOCK,
                 )
-                self._requests[approval_id] = expired_req
+                self.repository.save(expired_req)
             return False
 
         if not req.is_approved(current_time):
@@ -393,22 +417,22 @@ class ApprovalService:
 
     def get_approval_request(self, approval_id: str) -> ApprovalRequest | None:
         """Retrieves an approval request by identifier, checking time-based expiration."""
-        req = self._requests.get(approval_id)
+        req = self.repository.get(approval_id)
         if req is not None and req.is_expired():
             if req.status != ApprovalStatus.EXPIRED:
                 self.expire_stale_requests()
-                return self._requests.get(approval_id)
+                return self.repository.get(approval_id)
         return req
 
     def list_pending_requests(self) -> list[ApprovalRequest]:
         """Returns all approval requests currently in PENDING status."""
         self.expire_stale_requests()
-        return [r for r in self._requests.values() if r.status == ApprovalStatus.PENDING]
+        return [r for r in self.repository.list_all() if r.status == ApprovalStatus.PENDING]
 
     def list_all_requests(self) -> list[ApprovalRequest]:
         """Returns all approval requests."""
         self.expire_stale_requests()
-        return list(self._requests.values())
+        return self.repository.list_all()
 
     def list_approvals(
         self,
@@ -420,16 +444,13 @@ class ApprovalService:
     ) -> list[ApprovalRequest]:
         """Lists approval requests with multi-parameter filtering and deterministic pagination."""
         self.expire_stale_requests()
-        results = list(self._requests.values())
-        if status_filter is not None:
-            results = [r for r in results if r.status == status_filter]
-        if trace_id is not None:
-            results = [r for r in results if r.trace_id == trace_id]
-        if policy_id is not None:
-            results = [r for r in results if r.policy_id == policy_id]
-
-        results.sort(key=lambda r: (r.created_at, r.id), reverse=True)
-        return results[offset : offset + limit]
+        return self.repository.list_approvals(
+            status_filter=status_filter,
+            trace_id=trace_id,
+            policy_id=policy_id,
+            limit=limit,
+            offset=offset,
+        )
 
     def invalidate_approvals_for_policy(
         self, policy_id: str, reason: str = "Policy deactivated or deleted."
@@ -437,7 +458,7 @@ class ApprovalService:
         """Invalidates all pending approval requests linked to a specified policy."""
         now = datetime.now(timezone.utc)
         invalidated: list[str] = []
-        for req_id, req in list(self._requests.items()):
+        for req in self.repository.list_all():
             if req.policy_id == policy_id and req.status == ApprovalStatus.PENDING:
                 expired_req = ApprovalRequest(
                     id=req.id,
@@ -455,7 +476,10 @@ class ApprovalService:
                     decision_reason=reason,
                     final_effect=PolicyEffect.BLOCK,
                 )
-                self._requests[req_id] = expired_req
-                invalidated.append(req_id)
+                self.repository.save(expired_req)
+                invalidated.append(req.id)
         return invalidated
 
+    def delete_approval(self, approval_id: str) -> bool:
+        """Deletes an approval request from both cache and persistent store."""
+        return self.repository.delete(approval_id)

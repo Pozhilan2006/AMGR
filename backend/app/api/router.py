@@ -2,7 +2,6 @@
 
 try:
     from backend.app.api.routes import (
-        approvals,
         authorization,
         flow_events,
         graph,
@@ -13,7 +12,6 @@ try:
     )
 except ImportError:
     from app.api.routes import (
-        approvals,
         authorization,
         flow_events,
         graph,

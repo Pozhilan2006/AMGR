@@ -49,6 +49,8 @@ class AMGRConfig:
     backoff_jitter: bool = True
     shutdown_timeout_seconds: float = 5.0
     buffered: bool = False
+    fail_closed: bool = True
+    enforcement_timeout_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         """Validate configuration settings and raise ConfigurationError if invalid."""
@@ -135,6 +137,19 @@ class AMGRConfig:
         if not isinstance(self.buffered, bool):
             raise ConfigurationError(
                 f"buffered must be a boolean, got {type(self.buffered).__name__}"
+            )
+
+        if not isinstance(self.fail_closed, bool):
+            raise ConfigurationError(
+                f"fail_closed must be a boolean, got {type(self.fail_closed).__name__}"
+            )
+
+        if (
+            not isinstance(self.enforcement_timeout_seconds, (int, float))
+            or self.enforcement_timeout_seconds <= 0
+        ):
+            raise ConfigurationError(
+                f"enforcement_timeout_seconds must be a positive number (> 0), got {self.enforcement_timeout_seconds!r}"
             )
 
     def get_auth_token(self) -> str | None:
@@ -256,6 +271,22 @@ class AMGRConfig:
         buffered_raw = os.getenv("AMGR_BUFFERED_DELIVERY", os.getenv("AMGR_BUFFERED", "false")).strip().lower()
         buffered = buffered_raw in ("1", "true", "yes", "on")
 
+        # AMGR_ENFORCEMENT_FAIL_CLOSED
+        fail_closed_raw = os.getenv("AMGR_ENFORCEMENT_FAIL_CLOSED", "true").strip().lower()
+        fail_closed = fail_closed_raw not in ("0", "false", "no", "off")
+
+        # AMGR_ENFORCEMENT_TIMEOUT_SECONDS
+        enf_timeout_raw = os.getenv("AMGR_ENFORCEMENT_TIMEOUT_SECONDS")
+        if enf_timeout_raw is not None:
+            try:
+                enf_timeout = float(enf_timeout_raw)
+            except ValueError as exc:
+                raise ConfigurationError(
+                    f"Invalid non-numeric value for AMGR_ENFORCEMENT_TIMEOUT_SECONDS: {enf_timeout_raw!r}"
+                ) from exc
+        else:
+            enf_timeout = cls.enforcement_timeout_seconds
+
         return cls(
             api_base_url=os.getenv("AMGR_API_BASE_URL", cls.api_base_url),
             timeout_seconds=timeout,
@@ -274,4 +305,7 @@ class AMGRConfig:
             backoff_jitter=backoff_jitter,
             shutdown_timeout_seconds=shutdown_timeout,
             buffered=buffered,
+        )
+            fail_closed=fail_closed,
+            enforcement_timeout_seconds=enf_timeout,
         )

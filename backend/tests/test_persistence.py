@@ -13,11 +13,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db.session import Base
+from backend.app.models.approval import ApprovalModel
 from backend.app.models.policy import PolicyModel
 from backend.app.models.policy_decision import PolicyDecisionModel
 from backend.app.models.policy_version import PolicyVersionModel
+from backend.app.repositories.approval_repository import ApprovalRepository
 from backend.app.repositories.decision_repository import DecisionRepository
 from backend.app.repositories.policy_repository import PolicyRepository
+from backend.app.schemas.approval import ApprovalStatus
 from backend.app.schemas.authorization import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -36,7 +39,7 @@ from backend.app.services.authorization_service import AuthorizationService
 
 
 class TestDatabasePersistence(unittest.TestCase):
-    """Verifies relational database persistence for policies, versions, and decision history."""
+    """Verifies relational database persistence for policies, versions, decision history, and approvals."""
 
     def setUp(self) -> None:
         # Use an isolated in-memory SQLite database for test execution
@@ -47,7 +50,8 @@ class TestDatabasePersistence(unittest.TestCase):
 
         self.policy_repo = PolicyRepository(db_session=self.db)
         self.decision_repo = DecisionRepository(db_session=self.db)
-        self.approval_service = ApprovalService()
+        self.approval_repo = ApprovalRepository(db_session=self.db)
+        self.approval_service = ApprovalService(repository=self.approval_repo)
         self.auth_service = AuthorizationService(
             policy_repo=self.policy_repo,
             approval_service=self.approval_service,
@@ -269,6 +273,55 @@ class TestDatabasePersistence(unittest.TestCase):
         self.assertEqual(len(db_decisions), 1)
         self.assertEqual(db_decisions[0].decision, "ALLOW")
         self.assertEqual(db_decisions[0].policy_id, "pol_e2e_allow")
+
+    def test_approval_persists_to_database_and_across_reinstantiation(self) -> None:
+        """Approval requests created during evaluation are persisted in ApprovalModel and loadable across sessions."""
+        self.policy_repo.create_policy(
+            PolicyCreate(
+                id="pol_require_appr_db",
+                name="Approval policy",
+                priority=100,
+                rules=[
+                    RuleDefinition(
+                        id="r_appr",
+                        name="Require approval rule",
+                        condition=ConditionRule(
+                            field="action",
+                            operator=ConditionOperator.EQ,
+                            value="sensitive_action",
+                        ),
+                        effect=PolicyEffect.REQUIRE_APPROVAL,
+                    )
+                ],
+            )
+        )
+
+        req = AuthorizationRequest(
+            trace_id="trc_appr_db_test",
+            subject="operator",
+            action="sensitive_action",
+            resource="vault://key",
+        )
+
+        decision, appr = self.auth_service.authorize(req)
+        self.assertEqual(decision.decision, PolicyEffect.REQUIRE_APPROVAL)
+        self.assertIsNotNone(appr)
+
+        # Inspect database record directly
+        db_appr = self.db.get(ApprovalModel, appr.id)
+        self.assertIsNotNone(db_appr)
+        self.assertEqual(db_appr.trace_id, "trc_appr_db_test")
+        self.assertEqual(db_appr.status, "PENDING")
+        self.assertEqual(db_appr.policy_id, "pol_require_appr_db")
+
+        # Verify load across fresh session / repository
+        fresh_db: Session = self.SessionLocal()
+        fresh_repo = ApprovalRepository(db_session=fresh_db)
+        loaded = fresh_repo.get(appr.id)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.trace_id, "trc_appr_db_test")
+        self.assertEqual(loaded.status, ApprovalStatus.PENDING)
+        fresh_db.close()
 
 
 if __name__ == "__main__":
