@@ -30,10 +30,18 @@ class AMGRClient:
         *,
         buffered: bool | None = None,
         auto_start: bool = True,
+        authorization_client: Any | None = None,
     ) -> None:
         self.config = config or AMGRConfig.from_env()
         # Synchronous direct delivery is the default unless explicitly opted in
         self._is_buffered: bool = self.config.buffered if buffered is None else bool(buffered)
+
+        if authorization_client is not None:
+            self._authorization_client = authorization_client
+        else:
+            from amgr_sdk.enforcement.client import HttpAuthorizationClient
+
+            self._authorization_client = HttpAuthorizationClient(self.config)
 
         if recorder is None:
             from amgr_sdk.transport.http import HttpTransport
@@ -85,13 +93,24 @@ class AMGRClient:
         *,
         recorder: EventRecorder | None = None,
         auto_start: bool = True,
+        authorization_client: Any | None = None,
     ) -> "AMGRClient":
         """Factory creating an AMGRClient explicitly configured with buffered asynchronous delivery."""
-        return cls(recorder=recorder, config=config, buffered=True, auto_start=auto_start)
+        return cls(
+            recorder=recorder,
+            config=config,
+            buffered=True,
+            auto_start=auto_start,
+            authorization_client=authorization_client,
+        )
 
     @property
     def recorder(self) -> EventRecorder:
         return self._recorder
+
+    @property
+    def authorization_client(self) -> Any:
+        return self._authorization_client
 
     def record(self, event: FlowEvent) -> None:
         if not self.config.capture_enabled:

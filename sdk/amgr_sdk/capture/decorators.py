@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 import functools
 import inspect
 import logging
@@ -14,10 +15,18 @@ from amgr_sdk.enforcement.client import (
     AuthorizationClient,
     AuthorizationRequest,
 )
+from amgr_sdk.exceptions import (
+    AuthorizationBlockedError,
+    AuthorizationPendingApprovalError,
+    EnforcementConnectionError,
+    EnforcementError,
+)
 from amgr_sdk.models.events import ComponentRef, FlowEvent, sanitize_metadata
 from amgr_sdk.transport.base import Transport
 
 logger = logging.getLogger("amgr_sdk.capture")
+
+_ENFORCEMENT_IN_PROGRESS: ContextVar[bool] = ContextVar("_ENFORCEMENT_IN_PROGRESS", default=False)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -78,6 +87,43 @@ def _is_capture_enabled(
         return True
 
 
+def _resolve_authorization_client(
+    authorization_client: AuthorizationClient | None = None,
+    client: Any | None = None,
+    recorder: EventRecorder | None = None,
+) -> AuthorizationClient | None:
+    """Resolve the active AuthorizationClient from parameter, client, or default client."""
+    if authorization_client is not None:
+        return authorization_client
+    if client is not None and getattr(client, "authorization_client", None) is not None:
+        return client.authorization_client
+    from amgr_sdk.client import get_default_client
+
+    default_client = get_default_client()
+    if default_client is not None and getattr(default_client, "authorization_client", None) is not None:
+        return default_client.authorization_client
+    return None
+
+
+def _resolve_config(
+    client: Any | None = None,
+    recorder: EventRecorder | None = None,
+) -> Any:
+    if client is not None and hasattr(client, "config"):
+        return client.config
+    from amgr_sdk.client import get_default_client
+
+    def_client = get_default_client()
+    if def_client is not None and hasattr(def_client, "config"):
+        return def_client.config
+    from amgr_sdk.config import AMGRConfig
+
+    try:
+        return AMGRConfig.from_env()
+    except Exception:
+        return None
+
+
 def _check_authorization(
     rec: EventRecorder,
     authorization_client: AuthorizationClient,
@@ -87,7 +133,24 @@ def _check_authorization(
     data_labels: Sequence[str] | str | None,
     metadata: dict[str, Any] | None,
     raise_transport_errors: bool,
+    config: Any | None = None,
 ) -> None:
+    """Evaluates an operation against AMGR policy before execution.
+
+    - Recursion guard prevents re-interception during telemetry dispatch or internal HTTP calls.
+    - Constructs an immutable AuthorizationRequest correlating with current FlowContext.
+    - Dispatches to authorization_client.authorize(request).
+    - On ALLOW: permits execution to proceed.
+    - On BLOCK: records blocked FlowEvent and raises AuthorizationBlockedError.
+    - On REQUIRE_APPROVAL: records pending FlowEvent and raises AuthorizationPendingApprovalError.
+    - On EnforcementConnectionError:
+        - If fail_closed is True (default): records blocked FlowEvent and re-raises EnforcementConnectionError.
+        - If fail_closed is False: logs warning, marks enforcement_fail_open=True, and allows execution.
+    - On EnforcementError: records blocked FlowEvent and raises EnforcementError.
+    """
+    if _ENFORCEMENT_IN_PROGRESS.get():
+        return
+
     ctx = current_flow_context()
     flow_id = ctx.flow_id if ctx else uuid4()
     corr_id = ctx.correlation_id if ctx else uuid4()
@@ -100,37 +163,129 @@ def _check_authorization(
     meta = sanitize_metadata(metadata or {}, redact=True)
 
     auth_req = AuthorizationRequest(
-        flow_id=flow_id,
-        correlation_id=corr_id,
-        subject=resolved_source,
+        trace_id=str(flow_id),
+        subject=resolved_source.model_dump(mode="json"),
         action=action,
-        resource=destination,
-        data_labels=labels,
-        metadata=meta,
+        resource=destination.component_id,
+        context={"data_labels": list(labels), **meta},
     )
-    decision = authorization_client.authorize(auth_req)
-    if decision.outcome == "deny":
-        blocked_event = FlowEvent(
-            flow_id=flow_id,
-            correlation_id=corr_id,
-            parent_event_id=parent_id,
-            source=resolved_source,
-            destination=destination,
-            action=action,
-            data_labels=labels,
-            metadata={**meta, "decision_reason": decision.reason},
-            status="blocked",
-            duration_ms=0.0,
-        )
+
+    fail_closed = getattr(config, "fail_closed", True) if config is not None else True
+
+    token = _ENFORCEMENT_IN_PROGRESS.set(True)
+    try:
         try:
-            rec.record(blocked_event)
-        except Exception as exc:
-            if raise_transport_errors:
+            decision = authorization_client.authorize(auth_req)
+        except EnforcementConnectionError as exc:
+            if fail_closed:
+                blocked_event = FlowEvent(
+                    flow_id=flow_id,
+                    correlation_id=corr_id,
+                    parent_event_id=parent_id,
+                    source=resolved_source,
+                    destination=destination,
+                    action=action,
+                    data_labels=labels,
+                    metadata={**meta, "enforcement_error": str(exc)},
+                    status="blocked",
+                    duration_ms=0.0,
+                )
+                try:
+                    rec.record(blocked_event)
+                except Exception as record_exc:
+                    if raise_transport_errors:
+                        raise
+                    logger.warning("Failed to dispatch blocked FlowEvent: %s", record_exc)
                 raise
-            logger.warning("Failed to dispatch blocked FlowEvent: %s", exc)
-        raise PermissionError(
-            f"Operation {action!r} blocked by AMGR policy: {decision.reason}"
-        )
+            else:
+                logger.warning(
+                    "AMGR policy service connection failed; failing open due to fail_closed=False: %s",
+                    exc,
+                )
+                if metadata is not None and isinstance(metadata, dict):
+                    metadata["enforcement_fail_open"] = True
+                return
+        except EnforcementError as exc:
+            blocked_event = FlowEvent(
+                flow_id=flow_id,
+                correlation_id=corr_id,
+                parent_event_id=parent_id,
+                source=resolved_source,
+                destination=destination,
+                action=action,
+                data_labels=labels,
+                metadata={**meta, "enforcement_error": str(exc)},
+                status="blocked",
+                duration_ms=0.0,
+            )
+            try:
+                rec.record(blocked_event)
+            except Exception as record_exc:
+                if raise_transport_errors:
+                    raise
+                logger.warning("Failed to dispatch blocked FlowEvent: %s", record_exc)
+            raise
+
+        if decision.is_blocked:
+            blocked_event = FlowEvent(
+                flow_id=flow_id,
+                correlation_id=corr_id,
+                parent_event_id=parent_id,
+                source=resolved_source,
+                destination=destination,
+                action=action,
+                data_labels=labels,
+                metadata={
+                    **meta,
+                    "decision_reason": decision.reason_message,
+                    "policy_id": decision.policy_id,
+                    "matched_rule_id": decision.matched_rule_id,
+                },
+                status="blocked",
+                duration_ms=0.0,
+            )
+            try:
+                rec.record(blocked_event)
+            except Exception as exc:
+                if raise_transport_errors:
+                    raise
+                logger.warning("Failed to dispatch blocked FlowEvent: %s", exc)
+            raise AuthorizationBlockedError(
+                f"Operation {action!r} blocked by AMGR policy: {decision.reason_message}",
+                decision=decision,
+            )
+
+        if decision.requires_approval:
+            pending_event = FlowEvent(
+                flow_id=flow_id,
+                correlation_id=corr_id,
+                parent_event_id=parent_id,
+                source=resolved_source,
+                destination=destination,
+                action=action,
+                data_labels=labels,
+                metadata={
+                    **meta,
+                    "approval_id": decision.approval_id,
+                    "policy_id": decision.policy_id,
+                    "decision_reason": decision.reason_message,
+                },
+                status="pending",
+                duration_ms=0.0,
+            )
+            try:
+                rec.record(pending_event)
+            except Exception as exc:
+                if raise_transport_errors:
+                    raise
+                logger.warning("Failed to dispatch pending FlowEvent: %s", exc)
+            raise AuthorizationPendingApprovalError(
+                f"Operation {action!r} suspended pending human approval (approval_id: {decision.approval_id})",
+                approval_id=decision.approval_id,
+                decision=decision,
+            )
+    finally:
+        _ENFORCEMENT_IN_PROGRESS.reset(token)
 
 
 def capture(
@@ -162,16 +317,19 @@ def capture(
                 if not _is_capture_enabled(enabled, client, rec) or rec is None:
                     return await func(*args, **kwargs)
 
-                if authorization_client is not None:
+                auth_client = _resolve_authorization_client(authorization_client, client, rec)
+                if auth_client is not None:
+                    cfg = _resolve_config(client, rec)
                     _check_authorization(
                         rec=rec,
-                        authorization_client=authorization_client,
+                        authorization_client=auth_client,
                         action=action,
                         destination=destination,
                         source=source,
                         data_labels=data_labels,
                         metadata=metadata,
                         raise_transport_errors=raise_transport_errors,
+                        config=cfg,
                     )
 
                 original_strict = rec.strict
@@ -205,16 +363,19 @@ def capture(
             if not _is_capture_enabled(enabled, client, rec) or rec is None:
                 return func(*args, **kwargs)
 
-            if authorization_client is not None:
+            auth_client = _resolve_authorization_client(authorization_client, client, rec)
+            if auth_client is not None:
+                cfg = _resolve_config(client, rec)
                 _check_authorization(
                     rec=rec,
-                    authorization_client=authorization_client,
+                    authorization_client=auth_client,
                     action=action,
                     destination=destination,
                     source=source,
                     data_labels=data_labels,
                     metadata=metadata,
                     raise_transport_errors=raise_transport_errors,
+                    config=cfg,
                 )
 
             original_strict = rec.strict
@@ -275,16 +436,19 @@ def capture_span(
         yield dummy_op
         return
 
-    if authorization_client is not None:
+    auth_client = _resolve_authorization_client(authorization_client, client, rec)
+    if auth_client is not None:
+        cfg = _resolve_config(client, rec)
         _check_authorization(
             rec=rec,
-            authorization_client=authorization_client,
+            authorization_client=auth_client,
             action=action,
             destination=destination,
             source=source,
             data_labels=data_labels,
             metadata=metadata,
             raise_transport_errors=raise_transport_errors,
+            config=cfg,
         )
 
     original_strict = rec.strict

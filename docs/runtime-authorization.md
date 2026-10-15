@@ -144,3 +144,41 @@ AMGR guarantees auditability by recording every evaluated decision in `DecisionR
 - **Separation of Concerns**: Runtime decision records are stored in `policy_decisions`, completely separate from editable policy configurations (`policies`).
 - **Trace Correlation**: Every decision is indexed by `trace_id`, enabling end-to-end provenance queries for audit trails and security incident investigations.
 - **Audited Fields**: Captures `id`, `trace_id`, `subject`, `action`, `resource`, `decision`, `policy_id`, `matched_rule_id`, `matched_rule_ids`, `matched_policy_ids`, `reason_code`, `reason_message`, `context_data`, and `evaluated_at`.
+
+---
+
+## 7. SDK Authorization Client & Enforcement Interface
+
+The AMGR SDK provides typed models and client implementations for evaluating authorization decisions at the runtime boundary:
+
+### 7.1 Client Implementations
+- `AuthorizationClient` (`Protocol`): Abstract protocol declaring `authorize(self, request: AuthorizationRequest) -> AuthorizationDecision`.
+- `HttpAuthorizationClient`: Production HTTP client dispatching requests to `POST /api/v1/authorization` (with automatic fallback to `/api/v1/authorize`).
+  - Strict HTTPS validation for remote endpoints (permitting HTTP only for localhost/test environments).
+  - Configurable timeouts (`AMGRConfig.enforcement_timeout_seconds` or `AMGR_ENFORCEMENT_TIMEOUT_SECONDS`, default 5.0s).
+  - Captures `X-AMGR-Approval-ID` response header into `AuthorizationDecision.approval_id`.
+  - Translates network drops, timeouts, and HTTP 5xx errors into `EnforcementConnectionError`.
+  - Translates HTTP 4xx client errors into `EnforcementError`.
+  - Rejects malformed JSON, malformed schemas, and unknown decision values as `EnforcementError`.
+- `LocalAuthorizationClient`: In-process adapter delegating directly to a backend `AuthorizationService` without network overhead.
+
+### 7.2 Configuration & Failure Posture
+- `AMGRConfig.fail_closed: bool = True` (configurable via `AMGR_ENFORCEMENT_FAIL_CLOSED=true/false`).
+- Fail-closed is the strict default. Failures in network communication or malformed responses never grant implicit `ALLOW` permissions.
+
+### 7.3 Exception Hierarchy
+- `AMGRError`
+  - `EnforcementError`
+    - `EnforcementConnectionError`: Network drops, timeouts, and HTTP 5xx failures.
+    - `AuthorizationBlockedError` (also inherits from `PermissionError`): Operation explicitly blocked by policy (`BLOCK`).
+    - `AuthorizationPendingApprovalError`: Operation suspended pending human approval (`REQUIRE_APPROVAL`).
+
+### 7.4 Runtime Operation Interception Hook
+AMGR instruments Python functions and spans using decorators (`@capture`, `@capture_tool`, `@capture_agent`) and context managers (`capture_span`, `agent_span`, `tool_span`):
+- **Pre-Execution Gate**: Before an instrumented operation is invoked, the hook extracts active flow correlation from `FlowContext` (`flow_id` -> `trace_id`), constructs an immutable `AuthorizationRequest`, and evaluates it against the resolved `AuthorizationClient`.
+- **Recursion Guard**: Uses `_ENFORCEMENT_IN_PROGRESS` (`ContextVar[bool]`) to ensure internal SDK telemetry dispatch and logging calls do not trigger recursive authorization checks.
+- **Decision Handling**:
+  - `ALLOW`: The target function executes and returns normally.
+  - `BLOCK`: Dispatches a `FlowEvent(status="blocked")` and raises `AuthorizationBlockedError` (inheriting from `PermissionError` for backward compatibility). The target function is never invoked.
+  - `REQUIRE_APPROVAL`: Dispatches a `FlowEvent(status="pending")` and raises `AuthorizationPendingApprovalError` with `approval_id`. Execution is suspended.
+  - Connection/Timeout Failures: Fails closed by default (`EnforcementConnectionError`), halting execution. If explicitly configured with `fail_closed=False`, logs a warning, annotates metadata with `enforcement_fail_open=True`, and permits execution.
