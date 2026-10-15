@@ -31,6 +31,8 @@ from backend.app.services.authorization_service import AuthorizationService
 class TestResponse:
     """Wraps an ASGI HTTP response for assertions."""
 
+    __test__ = False
+
     def __init__(self, status_code: int, headers: dict[str, str], body: bytes) -> None:
         self.status_code = status_code
         self.headers = headers
