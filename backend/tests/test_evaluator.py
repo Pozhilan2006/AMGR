@@ -588,9 +588,9 @@ class TestRuleAndPolicyEvaluation(unittest.TestCase):
         )
         decision = evaluate_policy(policy, req_missing_clearance)
 
-        # MUST be BLOCK via DEFAULT_FALLBACK
+        # MUST be BLOCK via MISSING_CONTEXT
         self.assertEqual(decision.decision, PolicyEffect.BLOCK)
-        self.assertEqual(decision.reason_code, ReasonCode.DEFAULT_FALLBACK)
+        self.assertEqual(decision.reason_code, ReasonCode.MISSING_CONTEXT)
         self.assertIsNone(decision.matched_rule_id)
         self.assertEqual(decision.matched_rule_ids, [])
 
@@ -847,7 +847,7 @@ class TestPolicyPriorityAndConflictResolution(unittest.TestCase):
         )
         decision = evaluate_policies([pol_clearance], req)
         self.assertEqual(decision.decision, PolicyEffect.BLOCK)
-        self.assertEqual(decision.reason_code, ReasonCode.DEFAULT_FALLBACK)
+        self.assertEqual(decision.reason_code, ReasonCode.MISSING_CONTEXT)
         self.assertIsNone(decision.policy_id)
 
 

@@ -1,5 +1,6 @@
-from sqlalchemy.orm import DeclarativeBase
+try:
+    from backend.app.db.session import Base
+except ImportError:
+    from app.db.session import Base
 
-
-class Base(DeclarativeBase):
-    """Base class for SQLAlchemy models and Alembic metadata."""
+__all__ = ["Base"]

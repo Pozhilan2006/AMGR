@@ -96,6 +96,7 @@ class AuthorizationService:
                 decision = AuthorizationDecision(
                     decision=PolicyEffect.ALLOW,
                     policy_id=appr.policy_id,
+                    policy_version=appr.policy_version,
                     matched_rule_id=appr.matched_rule_id,
                     matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                     matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -110,6 +111,7 @@ class AuthorizationService:
                 decision = AuthorizationDecision(
                     decision=PolicyEffect.REQUIRE_APPROVAL,
                     policy_id=appr.policy_id,
+                    policy_version=appr.policy_version,
                     matched_rule_id=appr.matched_rule_id,
                     matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                     matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -123,6 +125,7 @@ class AuthorizationService:
                 decision = AuthorizationDecision(
                     decision=PolicyEffect.BLOCK,
                     policy_id=appr.policy_id,
+                    policy_version=appr.policy_version,
                     matched_rule_id=appr.matched_rule_id,
                     matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                     matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -136,6 +139,7 @@ class AuthorizationService:
                 decision = AuthorizationDecision(
                     decision=PolicyEffect.BLOCK,
                     policy_id=appr.policy_id,
+                    policy_version=appr.policy_version,
                     matched_rule_id=appr.matched_rule_id,
                     matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                     matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -151,6 +155,7 @@ class AuthorizationService:
                 decision = AuthorizationDecision(
                     decision=PolicyEffect.BLOCK,
                     policy_id=appr.policy_id,
+                    policy_version=getattr(current_pol, "version", appr.policy_version) if current_pol else appr.policy_version,
                     matched_rule_id=appr.matched_rule_id,
                     matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                     matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -164,6 +169,7 @@ class AuthorizationService:
             decision = AuthorizationDecision(
                 decision=PolicyEffect.BLOCK,
                 policy_id=appr.policy_id,
+                policy_version=appr.policy_version,
                 matched_rule_id=appr.matched_rule_id,
                 matched_rule_ids=[appr.matched_rule_id] if appr.matched_rule_id else [],
                 matched_policy_ids=[appr.policy_id] if appr.policy_id else [],
@@ -174,9 +180,18 @@ class AuthorizationService:
             return self._complete(request, decision, None)
 
         # 2. Standard deterministic policy evaluation
-        active_policies = self.policy_repo.list_all_policies()
+        candidate_policies = self.policy_repo.list_active_policies(
+            action=request.action,
+            resource=request.resource,
+        )
+        if not candidate_policies:
+            # Preserve ReasonCode.POLICY_DISABLED if all policies in the repository are disabled
+            all_pols = self.policy_repo.list_all_policies()
+            if all_pols and not any(p.enabled for p in all_pols):
+                candidate_policies = all_pols
+
         raw_decision = evaluate_policies(
-            policies=active_policies,
+            policies=candidate_policies,
             request=request,
             default_effect=PolicyEffect.BLOCK,
             conflict_algorithm=RuleResolutionAlgorithm.BLOCK_OVERRIDES,
@@ -185,7 +200,9 @@ class AuthorizationService:
         # 3. If REQUIRE_APPROVAL outcome, automatically initiate approval workflow
         if raw_decision.decision == PolicyEffect.REQUIRE_APPROVAL:
             policy_version = 1
-            if raw_decision.policy_id:
+            if raw_decision.policy_version is not None:
+                policy_version = raw_decision.policy_version
+            elif raw_decision.policy_id:
                 p = self.policy_repo.get_policy(raw_decision.policy_id)
                 if p is not None:
                     policy_version = p.version
@@ -200,13 +217,20 @@ class AuthorizationService:
             enriched_decision = AuthorizationDecision(
                 decision=raw_decision.decision,
                 policy_id=raw_decision.policy_id,
+                policy_version=raw_decision.policy_version,
                 matched_rule_id=raw_decision.matched_rule_id,
                 matched_rule_ids=raw_decision.matched_rule_ids,
                 matched_policy_ids=raw_decision.matched_policy_ids,
                 reason_code=raw_decision.reason_code,
                 reason_message=f"{raw_decision.reason_message} Created human approval request '{appr_req.id}'.",
+                missing_attributes=raw_decision.missing_attributes,
                 evaluated_at=raw_decision.evaluated_at,
             )
-            return self._complete(request, enriched_decision, appr_req)
+            try:
+                return self._complete(request, enriched_decision, appr_req)
+            except Exception:
+                if hasattr(self.approval_service, "_requests"):
+                    self.approval_service._requests.pop(appr_req.id, None)
+                raise
 
         return self._complete(request, raw_decision, None)
