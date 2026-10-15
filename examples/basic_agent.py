@@ -1,9 +1,9 @@
-from uuid import uuid4
-
 from amgr_sdk import ComponentRef, FlowContext, FlowEvent
 
 context = FlowContext()
 event = FlowEvent(
+    application_id="example-app",
+    environment="development",
     flow_id=context.flow_id,
     correlation_id=context.correlation_id,
     source=ComponentRef(component_id="agent-1", component_type="agent"),

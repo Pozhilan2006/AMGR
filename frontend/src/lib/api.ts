@@ -180,12 +180,59 @@ export function getGraphEvents(
 }
 
 export function getLineage(
-  params: { component_id: string; direction: "upstream" | "downstream"; limit?: number },
+  params: {
+    component_id: string;
+    direction: "upstream" | "downstream" | "both";
+    limit?: number;
+    offset?: number;
+    application_id?: string;
+    environment?: string;
+  },
 ): Promise<GraphLineageResponse> {
-  void params;
-  throw new ApiError(
-    "AMGR lineage queries are not implemented yet by Member 2.",
-    "unavailable",
+  const query = new URLSearchParams();
+  query.set("direction", params.direction);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  if (params.application_id) query.set("application_id", params.application_id);
+  if (params.environment) query.set("environment", params.environment);
+  return apiFetch<GraphLineageResponse>(
+    `/lineage/components/${encodeURIComponent(params.component_id)}?${query.toString()}`,
+  );
+}
+
+export function getEventLineage(params: {
+  event_id: string;
+  direction?: "upstream" | "downstream" | "both";
+  max_depth?: number;
+  limit?: number;
+  application_id?: string;
+  environment?: string;
+}): Promise<GraphLineageResponse> {
+  const query = new URLSearchParams();
+  if (params.direction) query.set("direction", params.direction);
+  if (params.max_depth !== undefined) query.set("max_depth", String(params.max_depth));
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.application_id) query.set("application_id", params.application_id);
+  if (params.environment) query.set("environment", params.environment);
+  return apiFetch<GraphLineageResponse>(
+    `/lineage/events/${encodeURIComponent(params.event_id)}?${query.toString()}`,
+  );
+}
+
+export function getFlowLineage(params: {
+  flow_id: string;
+  limit?: number;
+  offset?: number;
+  application_id?: string;
+  environment?: string;
+}): Promise<GraphLineageResponse> {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  if (params.application_id) query.set("application_id", params.application_id);
+  if (params.environment) query.set("environment", params.environment);
+  return apiFetch<GraphLineageResponse>(
+    `/lineage/flows/${encodeURIComponent(params.flow_id)}?${query.toString()}`,
   );
 }
 
@@ -197,11 +244,21 @@ export function getApprovals(): Promise<Approval[]> {
   return apiFetch<Approval[]>("/approvals");
 }
 
+export async function getApproval(approvalId: string): Promise<Approval> {
+  void approvalId;
+  throw new ApiError("AMGR approval detail route is not implemented by Member 3.", "unavailable");
+}
+
 export async function getDecisionHistory(): Promise<AuthorizationDecision[]> {
   throw new ApiError(
     "AMGR decision history has no read-only API route.",
     "unavailable",
   );
+}
+
+export async function getPolicy(policyId: string): Promise<Policy> {
+  void policyId;
+  throw new ApiError("AMGR policy detail route is not implemented by Member 3.", "unavailable");
 }
 
 export function sendOperatorMessage(

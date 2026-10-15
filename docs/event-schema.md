@@ -7,6 +7,7 @@ The shared event contract is a typed `FlowEvent` model used by the SDK and backe
 Required fields:
 
 - `event_id`: unique identifier for this event.
+- `application_id` and `environment`: required tenant/environment scope assigned by the trusted instrumentation configuration.
 - `flow_id`: correlation key for the runtime flow as a whole.
 - `correlation_id`: optional correlated request or session identifier.
 - `parent_event_id`: optional reference to the initiating event.
@@ -18,6 +19,8 @@ Required fields:
 - `metadata`: free-form metadata for extension and observability.
 - `status`: business or processing status, such as `observed` or `blocked`.
 - `duration_ms`: optional measured duration in milliseconds.
+
+`data_labels` is preserved as captured; the event schema does not identify these labels as input or output labels. `metadata` is opaque extension data: transformation metadata may be retained there only when instrumentation supplies it, but the backend does not interpret or derive transformations. Events must include a scope authorized by backend identity middleware before ingestion.
 
 ## `ComponentRef`
 

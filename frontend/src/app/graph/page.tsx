@@ -15,7 +15,7 @@ export default function FlowGraphPage() {
     <div className="page-content">
       <PageHeader
         title="Flow graph"
-        description="Explore observed component relationships when Member 2 exposes authoritative graph, neighborhood, and lineage records."
+        description="Inspect observed component relationships and explicitly recorded event lineage when authoritative backend records are available."
       />
 
       <GraphToolbar
@@ -62,6 +62,11 @@ export default function FlowGraphPage() {
         onSelectNode={(nodeId) => {
           graph.setSelectedNodeId(nodeId);
           void graph.loadComponentDetails(nodeId);
+          const componentId = graph.snapshot?.nodes.find((node) => node.id === nodeId)?.component.component_id;
+          if (componentId) {
+            void graph.loadLineage(componentId, "upstream");
+            void graph.loadLineage(componentId, "downstream");
+          }
         }}
         selectedEdgeId={graph.selectedEdgeId}
         selectedNodeId={graph.selectedNodeId}
@@ -70,7 +75,20 @@ export default function FlowGraphPage() {
 
       <div style={{ display: "grid", gap: 24, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
         <ComponentDetailsPanel component={graph.component ?? null} />
-        <LineagePanel lineage={[]} unavailable />
+        <LineagePanel
+          componentId={graph.snapshot?.nodes.find((node) => node.id === graph.selectedNodeId)?.component.component_id}
+          direction="upstream"
+          error={graph.lineages.upstream.error}
+          lineage={graph.lineages.upstream.data}
+          loading={graph.lineages.upstream.loading}
+        />
+        <LineagePanel
+          componentId={graph.snapshot?.nodes.find((node) => node.id === graph.selectedNodeId)?.component.component_id}
+          direction="downstream"
+          error={graph.lineages.downstream.error}
+          lineage={graph.lineages.downstream.data}
+          loading={graph.lineages.downstream.loading}
+        />
       </div>
 
       <section className="content-section" aria-labelledby="graph-interfaces-heading">
@@ -100,14 +118,14 @@ export default function FlowGraphPage() {
               <span className="integration-name">Relationship event history</span>
               <code>POST /api/v1/flow-events</code>
             </dt>
-            <dd>Ingestion route is present but returns 501; no relationship-history query contract is available.</dd>
+            <dd>Scoped event ingestion now persists records. The API does not yet provide a generic edge-history query.</dd>
           </div>
           <div className="integration-row">
             <dt>
               <span className="integration-name">Upstream and downstream lineage</span>
-              <code>No lineage API route</code>
+              <code>GET /api/v1/lineage/components/&#123;component_id&#125;</code>
             </dt>
-            <dd>Lineage resolution remains a backend dependency and should not be fabricated in the frontend.</dd>
+            <dd>Returns one-hop recorded component interactions and explicit parent references. Results require authenticated scope and report pagination and unresolved evidence.</dd>
           </div>
         </dl>
       </section>

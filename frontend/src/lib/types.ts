@@ -6,6 +6,8 @@ export interface ComponentRef {
 
 export interface FlowEvent {
   event_id: string;
+  application_id: string;
+  environment: string;
   flow_id: string;
   correlation_id: string | null;
   parent_event_id: string | null;
@@ -95,11 +97,39 @@ export interface GraphEventHistoryResponse {
   message?: string | null;
 }
 
+export interface LineageNode {
+  node_type: "event" | "component";
+  node_id: string;
+  label?: string | null;
+  component_type?: string | null;
+}
+
+export interface LineageEdge {
+  source_type: "event" | "component";
+  source_id: string;
+  target_type: "event" | "component";
+  target_id: string;
+  relationship_type: "explicit_parent_event" | "observed_interaction";
+  evidence_type: "recorded_parent_event_id" | "recorded_event_components";
+  event_id: string;
+}
+
 export interface GraphLineageResponse {
-  direction: "upstream" | "downstream";
-  items: Array<Record<string, unknown>>;
-  unavailable?: boolean;
-  message?: string | null;
+  events: FlowEvent[];
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+  unresolved_parent_event_ids: string[];
+  completeness: "unknown" | "incomplete";
+  truncated: boolean;
+  truncation_reasons: Array<"depth_limit" | "result_limit" | "page_limit">;
+  traversal: {
+    direction: "upstream" | "downstream" | "both";
+    max_depth: number | null;
+    limit: number;
+    offset: number;
+    next_offset: number | null;
+  };
+  scope: OperatorScope;
 }
 
 export interface Policy {
@@ -132,10 +162,15 @@ export interface OperatorScope {
   environment: string;
 }
 
+export type OperatorReferenceType = "graph_event" | "policy" | "decision";
+export type OperatorResponseType = "answer" | "clarification" | "proposal" | "error";
+
 export interface EvidenceReference {
-  reference_type: "graph_event" | "policy" | "decision";
+  reference_type: OperatorReferenceType;
   reference_id: string;
 }
+
+export type OperatorReference = EvidenceReference;
 
 export interface ProposedAction {
   title: string;
@@ -152,7 +187,7 @@ export interface OperatorChatRequest {
 export interface OperatorChatResponse {
   conversation_id: string;
   assistant_message: string;
-  response_type: "answer" | "clarification" | "proposal" | "error";
+  response_type: OperatorResponseType;
   references: EvidenceReference[] | null;
   proposed_actions: ProposedAction[] | null;
 }

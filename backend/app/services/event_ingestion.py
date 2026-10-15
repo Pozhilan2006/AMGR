@@ -1,14 +1,28 @@
-"""Placeholder event ingestion service.
+from sqlalchemy.exc import IntegrityError
 
-The actual implementation will validate, normalize, and persist runtime events.
-"""
+from app.ai_operator.schemas import OperatorScope
+from app.repositories.lineage_repository import LineageRepository
+from app.schemas.flow_event import FlowEvent
 
 
 class EventIngestionService:
-    """Inbound runtime event processing hook."""
+    def __init__(self, repository: LineageRepository) -> None:
+        self._repository = repository
 
-    def __init__(self) -> None:
-        self._implemented = False
-
-    def ingest(self, event: object) -> object:
-        raise NotImplementedError("Event ingestion is not implemented yet.")
+    def ingest(self, event: FlowEvent) -> bool:
+        try:
+            created = self._repository.save_event(event)
+            self._repository.commit()
+            return created
+        except IntegrityError:
+            self._repository.rollback()
+            existing = self._repository.get_event(
+                event.event_id,
+                OperatorScope(
+                    application_id=event.application_id,
+                    environment=event.environment,
+                ),
+            )
+            if existing == event:
+                return False
+            raise

@@ -2,12 +2,13 @@
 
 ## Current implementation
 
-The dashboard route `/graph` now renders the Phase 2 frontend shell for graph data,
-loading/error/unavailable states, filter placeholders, component details, and lineage
-panels. It does not render a live React Flow graph because the current backend does
-not provide authoritative graph records, neighborhoods, lineage, or event-history
-queries. No mock or inferred graph data is used. The existing `/flow-graph` URL
-remains a compatibility alias to the same status.
+The dashboard route `/graph` renders the Phase 2 frontend shell for graph data,
+loading/error/unavailable states, filter placeholders, component details, and
+upstream/downstream lineage panels. It does not render a live React Flow graph
+because the current graph snapshot route still returns 501. No mock or inferred
+graph data is used. Once an authoritative graph node can be selected, its stable
+`component.component_id` is used to query the lineage endpoint. The existing
+`/flow-graph` URL remains a compatibility redirect.
 
 The frontend API helper targets the configured API base URL plus `GET /graph`.
 With the default backend prefix, this is `GET /api/v1/graph`. The route exists in
@@ -41,16 +42,19 @@ endpoint is available.
 | Graph snapshot | `GET /api/v1/graph` | Route returns 501 |
 | Component details | No read endpoint | Missing |
 | Neighborhood query | No read endpoint | Missing |
-| Event ingestion | `POST /api/v1/flow-events` | Route returns 501; ingestion only |
+| Event ingestion | `POST /api/v1/flow-events` | Persists scope-authorized events after migration; requires identity middleware |
 | Event history for a relationship | No read endpoint | Missing |
-| Upstream/downstream lineage | `LineageService.resolve_lineage` | Placeholder raises `NotImplementedError`; no API route |
+| Event lineage | `GET /api/v1/lineage/events/{event_id}` | Implemented; scope-protected, follows explicit parent-event links, bounded by depth and result limit |
+| Flow records | `GET /api/v1/lineage/flows/{flow_id}` | Implemented; scope-protected, offset-paginated, no causal inference from shared flow ID |
+| Component lineage | `GET /api/v1/lineage/components/{component_id}` | Implemented; scope-protected, one-hop recorded interactions with direction filters; not component traversal |
 | Graph filters | No query parameters defined | Unsupported |
 | Pagination/truncation metadata | No API response contract defined | Unsupported |
 
-The project also declares `GraphService`, but its persistence/traversal method is
-unimplemented. The available `FlowEvent` schema includes event, flow,
-source/destination component, action, data-label, status, and timestamp fields;
-it does not mean events are persisted or queryable.
+The graph snapshot and component-neighborhood methods remain unimplemented.
+Events can now be stored by the event ingestion route and queried through the
+lineage service. The lineage API distinguishes explicit parent-event links from
+recorded component interactions, and does not imply that data necessarily
+propagated between an observed interaction's endpoints.
 
 ## Member 2 dependencies
 
@@ -62,10 +66,15 @@ document:
 2. Read-only component-detail and neighborhood endpoints, including supported
    result limits and pagination/truncation semantics.
 3. A read-only relationship event-history endpoint with exact filters and event
-   response schema.
-4. Upstream/downstream lineage endpoints with traversal bounds and explicit
-   completeness/truncation metadata.
-5. Any supported server-side filters and their query parameter validation.
+   response schema. The flow lineage endpoint is not a generic edge-history
+   endpoint.
+4. A working graph snapshot API with stable component IDs to make the existing
+   lineage panels reachable from graph selections.
+5. Any supported graph filters and their query parameter validation.
+
+Event ingestion and lineage also require the Alembic migration and trusted
+identity middleware. The current app does not install that middleware, so
+those endpoints return 401 until deployment provides it.
 
 No frontend filters, traversal, pagination, event histories, or graph controls
 are advertised as functional until those contracts exist. Once provided, the

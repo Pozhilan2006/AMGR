@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getFlowGraph, getGraphEvents, getGraphNeighborhood, getLineage } from "@/lib/api";
+import { ApiError, getFlowGraph, getGraphEvents, getGraphNeighborhood, getLineage } from "@/lib/api";
 import type {
   GraphComponentDetail,
   GraphEventHistoryResponse,
@@ -15,7 +15,12 @@ export function useFlowGraph(initialFilters: GraphFilterState = {}) {
   const [filters, setFilters] = useState<GraphFilterState>(initialFilters);
   const [snapshot, setSnapshot] = useState<GraphSnapshotResponse | null>(null);
   const [component, setComponent] = useState<GraphComponentDetail | null>(null);
-  const [lineage, setLineage] = useState<GraphLineageResponse | null>(null);
+  const [lineages, setLineages] = useState<
+    Record<"upstream" | "downstream", { data: GraphLineageResponse | null; error: string | null; loading: boolean }>
+  >({
+    upstream: { data: null, error: null, loading: false },
+    downstream: { data: null, error: null, loading: false },
+  });
   const [eventHistory, setEventHistory] = useState<GraphEventHistoryResponse | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -31,7 +36,10 @@ export function useFlowGraph(initialFilters: GraphFilterState = {}) {
       setSnapshot(nextSnapshot);
       setUnavailable(false);
       setComponent(null);
-      setLineage(null);
+      setLineages({
+        upstream: { data: null, error: null, loading: false },
+        downstream: { data: null, error: null, loading: false },
+      });
       setEventHistory(null);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Unable to load graph data.";
@@ -86,18 +94,25 @@ export function useFlowGraph(initialFilters: GraphFilterState = {}) {
     }
   }, [filters]);
 
-  const loadLineage = useCallback(async (componentId: string, direction: "upstream" | "downstream" = "upstream") => {
+  const loadLineage = useCallback(async (componentId: string, direction: "upstream" | "downstream") => {
+    setLineages((current) => ({
+      ...current,
+      [direction]: { data: null, error: null, loading: true },
+    }));
     try {
       const nextLineage = await getLineage({ component_id: componentId, direction, limit: 10 });
-      setLineage(nextLineage);
+      setLineages((current) => ({
+        ...current,
+        [direction]: { data: nextLineage, error: null, loading: false },
+      }));
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : "Lineage records are unavailable.";
-      setLineage({
-        direction,
-        items: [],
-        message,
-        unavailable: true,
-      });
+      const message = caughtError instanceof ApiError
+        ? caughtError.userMessage
+        : "Lineage records are unavailable.";
+      setLineages((current) => ({
+        ...current,
+        [direction]: { data: null, error: message, loading: false },
+      }));
     }
   }, []);
 
@@ -109,7 +124,7 @@ export function useFlowGraph(initialFilters: GraphFilterState = {}) {
     error,
     eventHistory,
     filters,
-    lineage,
+    lineages,
     loadComponentDetails,
     loadEdgeHistory,
     loadLineage,

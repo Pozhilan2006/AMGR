@@ -32,8 +32,8 @@ const destinations = [
   {
     href: "/operator",
     title: "AI Security Operator",
-    description: "The operator API requires authenticated access and provider configuration.",
-    state: "UNAVAILABLE",
+    description: "The chat route exists, but currently requires identity middleware and provider configuration that are not wired in this app.",
+    state: "AUTH REQUIRED",
   },
 ];
 
@@ -66,6 +66,45 @@ export default function OverviewPage() {
             </Link>
           ))}
         </div>
+      </section>
+
+      <section className="content-section" aria-labelledby="integration-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Integration status</p>
+            <h2 id="integration-heading">Available backend data</h2>
+          </div>
+        </div>
+        <dl className="integration-list">
+          <div className="integration-row">
+            <dt>
+              <span className="integration-name">API health</span>
+              <code>GET /api/v1/health</code>
+            </dt>
+            <dd>Implemented. Confirms API responsiveness only; it does not imply that data or governance services are available.</dd>
+          </div>
+          <div className="integration-row">
+            <dt>
+              <span className="integration-name">Graph, policies, approvals</span>
+              <code>GET /graph · GET /policies · GET /approvals</code>
+            </dt>
+            <dd>Routes are present but currently return HTTP 501. No counts or recent records can be derived.</dd>
+          </div>
+          <div className="integration-row">
+            <dt>
+              <span className="integration-name">Decision history</span>
+              <code>No history endpoint</code>
+            </dt>
+            <dd>The authorization POST route currently returns HTTP 501 and is not a decision-history API.</dd>
+          </div>
+          <div className="integration-row">
+            <dt>
+              <span className="integration-name">Operator chat</span>
+              <code>POST /operator/chat</code>
+            </dt>
+            <dd>Route contract exists, but this app does not register the required operator identity middleware. Provider configuration is also required.</dd>
+          </div>
+        </dl>
       </section>
 
       <section className="scope-note" aria-label="Data availability note">

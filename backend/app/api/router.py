@@ -6,6 +6,7 @@ from app.api.routes import (
     flow_events,
     graph,
     health,
+    lineage,
     operator,
     policies,
 )
@@ -17,4 +18,5 @@ api_router.include_router(graph.router, prefix="/graph", tags=["graph"])
 api_router.include_router(policies.router, prefix="/policies", tags=["policies"])
 api_router.include_router(authorization.router, prefix="/authorization", tags=["authorization"])
 api_router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
+api_router.include_router(lineage.router, prefix="/lineage", tags=["lineage"])
 api_router.include_router(operator.router, prefix="/operator", tags=["operator"])

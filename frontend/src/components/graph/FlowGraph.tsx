@@ -58,7 +58,7 @@ export function FlowGraph({
   if (unavailable || (!nodes.length && !edges.length)) {
     return (
       <EmptyState
-        description="No authoritative graph records are available yet. The backend graph snapshot, neighborhood, and lineage APIs are still pending Member 2 implementation."
+        description="No authoritative graph snapshot records are available. Component lineage endpoints exist, but they require a component ID from a usable graph snapshot."
         state="integration"
         title="Graph data unavailable"
       />
