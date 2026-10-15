@@ -157,10 +157,10 @@ def db_span(
                 pass
 
         dummy_op = ActiveOperation(
-            recorder=EventRecorder(_NoOpTransport()),
+            recorder=EventRecorder(_NoOpTransport(), recording_enabled=False),
             action="db.query",
             destination=dest,
-            source=source or ComponentRef(component_id="unknown-source", component_type="service"),
+            source=source,
             data_labels=labels,
             metadata=safe_meta,
             flow_id=uuid4(),

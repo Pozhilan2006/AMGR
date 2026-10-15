@@ -74,7 +74,7 @@ class GraphEdge(Base):
 
     # Interaction Action
     action: Mapped[str] = mapped_column(
-        String(255),
+        String(500),
         nullable=False,
         doc="Operation or action name representing this directed interaction.",
     )
@@ -107,7 +107,7 @@ class GraphEdge(Base):
 
     # Latest Event Status
     last_status: Mapped[str] = mapped_column(
-        String(64),
+        String(100),
         nullable=False,
         default="observed",
         server_default=text("'observed'"),

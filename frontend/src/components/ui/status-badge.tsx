@@ -7,6 +7,7 @@ const knownStatuses: Record<string, string> = {
   require_approval: "status-badge-review",
   review: "status-badge-review",
   pending: "status-badge-pending",
+  incomplete: "status-badge-pending",
   unavailable: "status-badge-neutral",
   observed: "status-badge-neutral",
 };

@@ -1,4 +1,4 @@
-"""Basic Agent example demonstrating runtime capture and nested lineage."""
+﻿"""Basic Agent example demonstrating runtime capture and nested lineage."""
 
 from amgr_sdk import (
     AMGRClient,
@@ -24,7 +24,13 @@ class LocalCollector:
 
 
 collector = LocalCollector()
-client = AMGRClient(recorder=EventRecorder(collector))
+client = AMGRClient(
+    recorder=EventRecorder(
+        collector,
+        application_id="example-app",
+        environment="development",
+    )
+)
 
 # Define components
 agent = ComponentRef.agent(component_id="agent-1", name="Research Agent")

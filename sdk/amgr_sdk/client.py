@@ -62,9 +62,21 @@ class AMGRClient:
                 transport,
                 sensitive_field_keys=self.config.sensitive_field_keys,
                 redact_sensitive_fields=self.config.redact_sensitive_fields,
+                application_id=self.config.application_id,
+                environment=self.config.environment,
             )
         else:
             from amgr_sdk.delivery import DeliveryPipeline, QueuedTransport
+
+            if self.config.application_id is not None:
+                if recorder.application_id is None and recorder.environment is None:
+                    recorder.application_id = self.config.application_id
+                    recorder.environment = self.config.environment
+                elif (
+                    recorder.application_id != self.config.application_id
+                    or recorder.environment != self.config.environment
+                ):
+                    raise ValueError("Recorder scope must match AMGRConfig scope.")
 
             if isinstance(recorder.transport, QueuedTransport):
                 self._recorder = recorder
@@ -81,6 +93,8 @@ class AMGRClient:
                     strict=recorder.strict,
                     sensitive_field_keys=self.config.sensitive_field_keys,
                     redact_sensitive_fields=self.config.redact_sensitive_fields,
+                    application_id=recorder.application_id,
+                    environment=recorder.environment,
                 )
             else:
                 self._recorder = recorder
@@ -172,7 +186,16 @@ class AMGRClient:
             else {}
         )
 
+        application_id = self._recorder.application_id or self.config.application_id
+        environment = self._recorder.environment or self.config.environment
+        if application_id is None or environment is None:
+            raise ValueError(
+                "AMGR event creation requires application_id and environment in the client config or recorder."
+            )
+
         return FlowEvent(
+            application_id=application_id,
+            environment=environment,
             flow_id=resolved_flow_id,
             correlation_id=resolved_corr_id,
             parent_event_id=resolved_parent_id,

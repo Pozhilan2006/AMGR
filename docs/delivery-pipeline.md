@@ -35,6 +35,8 @@ The delivery pipeline is configured via `AMGRConfig` or environment variables:
 | `queue_overflow_strategy`| `AMGR_QUEUE_OVERFLOW_STRATEGY`| `"drop_oldest"` | Action taken when queue reaches capacity (`drop_oldest`, `drop_newest`, `block`, `raise`). |
 | `shutdown_timeout_seconds`| `AMGR_SHUTDOWN_TIMEOUT_SECONDS`| `5.0` | Maximum seconds allowed for bounded final flush during client shutdown. |
 | `backoff_jitter` | `AMGR_BACKOFF_JITTER` | `true` | Adds randomized jitter to exponential retry backoffs. |
+| `application_id` | `AMGR_APPLICATION_ID` | unset | Required with `environment` for event capture; copied to each event. |
+| `environment` | `AMGR_ENVIRONMENT` | unset | Required with `application_id` for event capture; copied to each event. |
 
 ---
 
@@ -43,28 +45,34 @@ The delivery pipeline is configured via `AMGRConfig` or environment variables:
 ### Pattern A: Standard Synchronous Client (Default)
 
 ```python
-from amgr_sdk import AMGRClient, ComponentRef
+from amgr_sdk import AMGRClient, AMGRConfig, ComponentRef
 
 # Instantiates client in synchronous direct delivery mode (zero background threads)
-client = AMGRClient()
+client = AMGRClient(
+    config=AMGRConfig(application_id="example-app", environment="development")
+)
 
 client.record_event(
     action="user.login",
-    destination=ComponentRef("auth-service", "service"),
+    source=ComponentRef.user("user-1"),
+    destination=ComponentRef.service("auth-service"),
 )
 ```
 
 ### Pattern B: Buffered Client via Factory
 
 ```python
-from amgr_sdk import AMGRClient, ComponentRef
+from amgr_sdk import AMGRClient, AMGRConfig, ComponentRef
 
 # Explicitly opt into buffered asynchronous delivery
-client = AMGRClient.buffered()
+client = AMGRClient.buffered(
+    config=AMGRConfig(application_id="example-app", environment="development")
+)
 
 client.record_event(
     action="checkout.complete",
-    destination=ComponentRef("order-service", "service"),
+    source=ComponentRef.service("checkout-api"),
+    destination=ComponentRef.service("order-service"),
 )
 
 # Explicitly flush buffered events

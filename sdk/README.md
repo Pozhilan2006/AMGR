@@ -5,3 +5,8 @@ The SDK currently provides typed flow-event and authorization contracts, flow co
 Install from the repository root with `python -m pip install -e ./sdk`. Applications can import the public package with `import amgr_sdk`. API and event contracts are documented in [`../docs/event-schema.md`](../docs/event-schema.md) and [`../docs/api-contracts.md`](../docs/api-contracts.md).
 
 `AMGRConfig.from_env()` reads `AMGR_API_BASE_URL` and `AMGR_TIMEOUT_SECONDS`. The default URL is for local development; no credentials or AI-provider configuration are required.
+
+Every recorded `FlowEvent` must include its trusted `application_id` and
+`environment`. These values are required so the backend can enforce tenant and
+environment scope for persistence and lineage queries; they must not be
+inferred from event relationships.

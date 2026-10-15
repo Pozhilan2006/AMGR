@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -44,10 +45,9 @@ class LineageRecord(Base):
         payloads must NEVER be persisted here.
 
     Foreign Key & Deletion Policy:
-        Foreign keys reference `flow_events.event_id` and `graph_nodes.node_id`.
-        `originating_event_id` uses RESTRICT to protect historical audit records
-        from accidental deletion. Optional node and parent references use SET NULL
-        to preserve lineage records if entities are pruned.
+        Event references include application and environment in their composite
+        foreign keys so lineage cannot cross a scope. The originating event uses
+        RESTRICT; optional graph-node references use SET NULL.
     """
 
     __tablename__ = "lineage_records"
@@ -67,16 +67,19 @@ class LineageRecord(Base):
         doc="Runtime flow session identifier.",
     )
 
+    # Scope columns are part of event identity and are repeated here so every
+    # event relationship remains within the same application/environment.
+    application_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    environment: Mapped[str] = mapped_column(String(100), nullable=False)
+
     # Event References
     originating_event_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("flow_events.event_id", ondelete="RESTRICT"),
         nullable=False,
         doc="Foreign key to the originating FlowEvent that evidenced this transition.",
     )
     parent_event_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("flow_events.event_id", ondelete="SET NULL"),
         nullable=True,
         default=None,
         doc="Optional foreign key to the causal parent event in flow_events.",
@@ -112,7 +115,7 @@ class LineageRecord(Base):
 
     # Transformation Action
     action: Mapped[str] = mapped_column(
-        String(255),
+        String(500),
         nullable=False,
         doc="Action or transformation performed during this transition.",
     )
@@ -155,12 +158,12 @@ class LineageRecord(Base):
     # Relationships
     originating_event: Mapped["FlowEventRecord"] = relationship(
         "FlowEventRecord",
-        foreign_keys=[originating_event_id],
+        foreign_keys=[originating_event_id, application_id, environment],
         doc="Relationship to the originating flow event.",
     )
     parent_event: Mapped["FlowEventRecord | None"] = relationship(
         "FlowEventRecord",
-        foreign_keys=[parent_event_id],
+        foreign_keys=[parent_event_id, application_id, environment],
         doc="Relationship to the preceding parent flow event.",
     )
     source_node: Mapped["GraphNode | None"] = relationship(
@@ -175,6 +178,17 @@ class LineageRecord(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["originating_event_id", "application_id", "environment"],
+            ["flow_events.event_id", "flow_events.application_id", "flow_events.environment"],
+            name="fk_lineage_originating_event_scope",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["parent_event_id", "application_id", "environment"],
+            ["flow_events.event_id", "flow_events.application_id", "flow_events.environment"],
+            name="fk_lineage_parent_event_scope",
+        ),
         # Check constraint restricting classification
         CheckConstraint(
             "lineage_classification IN ('directly_observed', 'explicitly_derived', 'unknown_or_incomplete')",

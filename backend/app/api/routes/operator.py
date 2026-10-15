@@ -1,8 +1,8 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, Request, Response, status
 
+from app.api.dependencies import get_operator_identity, resolve_scope
 from app.ai_operator.providers.base import (
     ProviderConfigurationError,
     ProviderUnavailableError,
@@ -17,42 +17,6 @@ from app.ai_operator.schemas import (
 from app.ai_operator.service import OperatorService, get_operator_service
 
 router = APIRouter()
-
-
-def get_operator_identity(request: Request) -> OperatorIdentity:
-    identity = getattr(request.state, "operator_identity", None)
-    if identity is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication is required for the AI operator.",
-        )
-
-    try:
-        return OperatorIdentity.model_validate(identity)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="The authenticated identity is invalid.",
-        ) from exc
-
-
-def resolve_scope(
-    requested_scope: OperatorScope | None, identity: OperatorIdentity
-) -> OperatorScope:
-    if requested_scope is None:
-        if len(identity.authorized_scopes) != 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Specify one of the authenticated identity's authorized scopes.",
-            )
-        return identity.authorized_scopes[0]
-
-    if requested_scope not in identity.authorized_scopes:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="The requested scope is not authorized.",
-        )
-    return requested_scope
 
 
 def error_response(

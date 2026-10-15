@@ -18,6 +18,8 @@ class AMGRConfig:
         retry_backoff_seconds: Initial backoff delay between retries in seconds (>= 0).
         auth_token: Optional static bearer token for backend authorization.
         token_provider: Optional callable returning a bearer token dynamically.
+        application_id/environment: Required together when using capture APIs; these
+            values are copied into each event and checked by backend identity middleware.
         capture_enabled: Master switch to enable or disable telemetry capture.
         sensitive_field_keys: Additional metadata keys to redact or reject.
         redact_sensitive_fields: If True, sensitive metadata is masked rather than rejected.
@@ -35,6 +37,8 @@ class AMGRConfig:
     retry_backoff_seconds: float = 0.5
     auth_token: str | None = None
     token_provider: Callable[[], str | None] | None = None
+    application_id: str | None = None
+    environment: str | None = None
     capture_enabled: bool = True
     sensitive_field_keys: tuple[str, ...] = ()
     redact_sensitive_fields: bool = True
@@ -81,6 +85,14 @@ class AMGRConfig:
 
         if self.token_provider is not None and not callable(self.token_provider):
             raise ConfigurationError("token_provider must be a callable if provided.")
+
+        if (self.application_id is None) != (self.environment is None):
+            raise ConfigurationError("application_id and environment must be configured together.")
+        if self.application_id is not None:
+            if not self.application_id.strip() or len(self.application_id.strip()) > 200:
+                raise ConfigurationError("application_id must contain 1 to 200 non-whitespace characters.")
+            if self.environment is None or not self.environment.strip() or len(self.environment.strip()) > 100:
+                raise ConfigurationError("environment must contain 1 to 100 non-whitespace characters.")
 
         if not isinstance(self.capture_enabled, bool):
             raise ConfigurationError(
@@ -281,6 +293,8 @@ class AMGRConfig:
             max_retries=retries,
             retry_backoff_seconds=backoff,
             auth_token=os.getenv("AMGR_AUTH_TOKEN", cls.auth_token),
+            application_id=os.getenv("AMGR_APPLICATION_ID"),
+            environment=os.getenv("AMGR_ENVIRONMENT"),
             capture_enabled=capture_enabled,
             sensitive_field_keys=sensitive_keys,
             redact_sensitive_fields=redact,
@@ -291,6 +305,7 @@ class AMGRConfig:
             backoff_jitter=backoff_jitter,
             shutdown_timeout_seconds=shutdown_timeout,
             buffered=buffered,
+        )
             fail_closed=fail_closed,
             enforcement_timeout_seconds=enf_timeout,
         )

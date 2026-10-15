@@ -135,6 +135,8 @@ def _check_authorization(
     raise_transport_errors: bool,
     config: Any | None = None,
 ) -> None:
+    if rec.application_id is None or rec.environment is None:
+        raise ValueError("Authorized event capture requires application_id and environment on EventRecorder.")
     """Evaluates an operation against AMGR policy before execution.
 
     - Recursion guard prevents re-interception during telemetry dispatch or internal HTTP calls.
@@ -157,7 +159,7 @@ def _check_authorization(
     parent_id = ctx.parent_event_id if ctx else None
     resolved_source = source or (ctx.current_component if ctx and ctx.current_component else None)
     if resolved_source is None:
-        resolved_source = ComponentRef(component_id="unknown-source", component_type="service")
+        raise ValueError("Event source must be specified or set in the active FlowContext.")
 
     labels = _resolve_data_labels(data_labels)
     meta = sanitize_metadata(metadata or {}, redact=True)
@@ -169,6 +171,22 @@ def _check_authorization(
         resource=destination.component_id,
         context={"data_labels": list(labels), **meta},
     )
+    decision = authorization_client.authorize(auth_req)
+    if decision.outcome == "deny":
+        blocked_event = FlowEvent(
+            application_id=rec.application_id,
+            environment=rec.environment,
+            flow_id=flow_id,
+            correlation_id=corr_id,
+            parent_event_id=parent_id,
+            source=resolved_source,
+            destination=destination,
+            action=action,
+            data_labels=labels,
+            metadata={**meta, "decision_reason": decision.reason},
+            status="blocked",
+            duration_ms=0.0,
+        )
 
     fail_closed = getattr(config, "fail_closed", True) if config is not None else True
 
@@ -424,9 +442,10 @@ def capture_span(
     """Context manager for instrumenting code blocks with automatic duration, causality, and failure tracking."""
     rec = _resolve_recorder(client, recorder)
     if not _is_capture_enabled(enabled, client, rec) or rec is None:
-        dummy_source = source or ComponentRef(component_id="unknown-source", component_type="service")
+        ctx = current_flow_context()
+        dummy_source = source or (ctx.current_component if ctx else None)
         dummy_op = ActiveOperation(
-            recorder=rec or EventRecorder(_NoOpTransport()),
+            recorder=EventRecorder(_NoOpTransport(), recording_enabled=False),
             action=action,
             destination=destination,
             source=dummy_source,

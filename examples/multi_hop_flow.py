@@ -40,7 +40,13 @@ class InMemoryTransport(Transport):
 def run_multi_hop_flow() -> list[FlowEvent]:
     # 1. Setup in-memory client for telemetry verification
     transport = InMemoryTransport()
-    client = AMGRClient(recorder=EventRecorder(transport))
+    client = AMGRClient(
+        recorder=EventRecorder(
+            transport,
+            application_id="example-app",
+            environment="development",
+        )
+    )
     set_default_client(client)
 
     # 2. Define component descriptors for the 8 tiers

@@ -1,138 +1,96 @@
-"""Pydantic schemas for runtime flow lineage and provenance contracts."""
-
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-# Valid classifications matching database check constraint
-LineageClassification = Literal[
-    "directly_observed",
-    "explicitly_derived",
-    "unknown_or_incomplete",
-]
+from app.ai_operator.schemas import OperatorScope
+from app.schemas.flow_event import FlowEvent
+
+LineageDirection = Literal["upstream", "downstream", "both"]
+LineageCompleteness = Literal["complete", "incomplete", "unknown"]
 
 
-class LineageRecord(BaseModel):
-    """Pydantic schema representing a single causal lineage transition and provenance evidence."""
+class LineageNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    node_type: Literal["event", "component"]
+    node_id: str
+    label: str | None = None
+    component_type: str | None = None
 
-    # Core lineage identity
-    record_id: UUID = Field(
-        default_factory=uuid4,
-        description="Internal primary identifier for the lineage record.",
-    )
-    flow_id: UUID = Field(
-        ...,
-        description="Runtime flow session identifier.",
-    )
 
-    # Event references
-    originating_event_id: UUID = Field(
-        ...,
-        description="UUID of the FlowEvent that produced or evidenced this transition.",
-    )
-    parent_event_id: UUID | None = Field(
-        default=None,
-        description="Optional UUID of the causal parent FlowEvent.",
-    )
+class LineageEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    # Optional resolved node references
-    source_node_id: UUID | None = Field(
-        default=None,
-        description="Optional internal UUID of the origin GraphNode.",
-    )
-    destination_node_id: UUID | None = Field(
-        default=None,
-        description="Optional internal UUID of the destination GraphNode.",
-    )
+    source_type: Literal["event", "component"]
+    source_id: str
+    target_type: Literal["event", "component"]
+    target_id: str
+    relationship_type: Literal["explicit_parent_event", "observed_interaction"]
+    evidence_type: Literal["recorded_parent_event_id", "recorded_event_components"]
+    event_id: str
 
-    # Classification and grounding evidence
-    lineage_classification: LineageClassification = Field(
-        ...,
-        description="Reliability tier ('directly_observed', 'explicitly_derived', 'unknown_or_incomplete').",
-    )
-    evidence_source: str = Field(
-        ...,
-        description="Source of lineage evidence (e.g., 'sdk_runtime_event', 'context_propagation').",
-    )
 
-    # Transformation details
-    action: str = Field(
-        ...,
-        description="Action or transformation performed during this transition.",
-    )
-    data_labels: list[str] = Field(
-        default_factory=list,
-        description="Sensitivity classification labels associated with this lineage step.",
-    )
+class LineageTraversal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: LineageDirection
+    max_depth: int | None = None
+    limit: int
+    offset: int = 0
+    next_offset: int | None = None
+
+
+class LineageRecordView(BaseModel):
+    """Stored evidence record tied to an event in the returned scope."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, extra="forbid")
+
+    record_id: UUID = Field(default_factory=uuid4)
+    flow_id: UUID
+    application_id: str
+    environment: str
+    originating_event_id: UUID
+    parent_event_id: UUID | None = None
+    source_node_id: UUID | None = None
+    destination_node_id: UUID | None = None
+    lineage_classification: Literal[
+        "directly_observed", "explicitly_derived", "unknown_or_incomplete"
+    ]
+    evidence_source: str
+    action: str
+    data_labels: list[str] = Field(default_factory=list)
     transformation_metadata: dict[str, Any] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("transformation_metadata", "metadata", "safe_metadata"),
-        description="Sanitized transformation metadata (strictly no raw prompts, credentials, or payloads).",
     )
-
-    # Topological distance
-    depth: int | None = Field(
-        default=None,
-        ge=0,
-        description="Optional distance/depth from root event in the causal flow graph (nonnegative).",
-    )
-
-    # Occurrence timestamp
-    recorded_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        description="Timezone-aware UTC timestamp when this lineage record was recorded.",
-    )
-
-    @field_validator("recorded_at", mode="before")
-    @classmethod
-    def _default_timestamp_if_none(cls, value: Any) -> Any:
-        if value is None:
-            return datetime.now(timezone.utc)
-        return value
+    depth: int | None = Field(default=None, ge=0)
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("data_labels", mode="before")
     @classmethod
-    def _default_data_labels_if_none(cls, value: Any) -> Any:
-        if value is None:
-            return []
-        return value
+    def default_data_labels(cls, value: Any) -> Any:
+        return [] if value is None else value
 
     @field_validator("transformation_metadata", mode="before")
     @classmethod
-    def _default_transformation_metadata_if_none(cls, value: Any) -> Any:
-        if value is None:
-            return {}
-        return value
+    def default_metadata(cls, value: Any) -> Any:
+        return {} if value is None else value
 
 
-class FlowLineageResponse(BaseModel):
-    """Pydantic response schema for flow lineage queries."""
+class LineageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    model_config = ConfigDict(from_attributes=True)
-
-    flow_id: UUID = Field(
-        ...,
-        description="Runtime flow session identifier.",
-    )
-    records: list[LineageRecord] = Field(
-        default_factory=list,
-        description="Collection of chronological or hierarchical lineage records for this flow.",
-    )
-    total_records: int = Field(
-        default=0,
-        ge=0,
-        description="Total count of lineage records in this response.",
-    )
-    generated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        description="Timezone-aware UTC timestamp when this response was generated.",
-    )
-
-
-# Architectural aliases
-LineageRecordResponse = LineageRecord
-LineageResponse = FlowLineageResponse
+    events: list[FlowEvent]
+    lineage_records: list[LineageRecordView] = Field(default_factory=list)
+    nodes: list[LineageNode]
+    edges: list[LineageEdge]
+    unresolved_parent_event_ids: list[str]
+    completeness: LineageCompleteness
+    truncated: bool
+    truncation_reasons: list[
+        Literal["cycle_detected", "depth_limit", "result_limit", "page_limit"]
+    ]
+    traversal: LineageTraversal
+    scope: OperatorScope

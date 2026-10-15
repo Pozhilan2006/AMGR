@@ -1,4 +1,4 @@
-"""Database models package for AMGR.
+﻿"""Database models package for AMGR.
 
 Exports PolicyModel, PolicyVersionModel, PolicyDecisionModel,
 GraphNode, GraphEdge, FlowEventRecord, and LineageRecord.

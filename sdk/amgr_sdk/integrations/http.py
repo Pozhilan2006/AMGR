@@ -9,6 +9,7 @@ from typing import Any, Iterator, TypeVar
 import urllib.error
 from urllib.parse import urlsplit, urlunsplit
 import urllib.request
+from uuid import uuid4
 
 from amgr_sdk.capture.recorder import ActiveOperation, EventRecorder, _resolve_data_labels
 from amgr_sdk.exceptions import IntegrationError
@@ -131,13 +132,13 @@ def http_span(
                 pass
 
         dummy_op = ActiveOperation(
-            recorder=EventRecorder(_NoOpTransport()),
+            recorder=EventRecorder(_NoOpTransport(), recording_enabled=False),
             action="http.request",
             destination=dest,
-            source=source or ComponentRef(component_id="unknown-source", component_type="service"),
+            source=source,
             data_labels=labels,
             metadata=safe_meta,
-            flow_id=urllib.request.uuid.uuid4() if hasattr(urllib.request, "uuid") else ComponentRef.model_fields.__class__(),  # type: ignore[attr-defined]
+            flow_id=uuid4(),
         )
         yield dummy_op
         return

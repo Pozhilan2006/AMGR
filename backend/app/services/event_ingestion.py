@@ -1,4 +1,4 @@
-"""Event ingestion service for AMGR flow events."""
+﻿"""Event ingestion service for AMGR flow events."""
 
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -63,7 +63,11 @@ class CrossFlowParentError(InvalidParentEventError):
 
 def _events_match(incoming: FlowEvent, persisted: FlowEventRecord) -> bool:
     """Compare an incoming FlowEvent with an existing FlowEventRecord across public contract fields."""
-    if incoming.flow_id != persisted.flow_id:
+    if (
+        incoming.application_id != persisted.application_id
+        or incoming.environment != persisted.environment
+        or incoming.flow_id != persisted.flow_id
+    ):
         return False
 
     if incoming.action != persisted.action:
@@ -138,6 +142,24 @@ def _events_match(incoming: FlowEvent, persisted: FlowEventRecord) -> bool:
     return True
 
 
+def _get_scoped_event(
+    session: Session,
+    event_id: UUID,
+    *,
+    application_id: str,
+    environment: str,
+    for_update: bool = False,
+) -> FlowEventRecord | None:
+    stmt = select(FlowEventRecord).where(
+        FlowEventRecord.event_id == event_id,
+        FlowEventRecord.application_id == application_id,
+        FlowEventRecord.environment == environment,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def _flow_id_to_advisory_lock_keys(flow_id: UUID) -> tuple[int, int]:
     """Derive two 32-bit signed integers from a UUID for PostgreSQL pg_advisory_xact_lock(int, int).
 
@@ -194,6 +216,9 @@ def _would_create_cycle(
     child_id: UUID,
     proposed_parent_id: UUID,
     session: Session,
+    *,
+    application_id: str,
+    environment: str,
 ) -> bool:
     """Detect whether linking child_id -> proposed_parent_id would create or encounter a cyclic ancestor chain.
 
@@ -217,10 +242,20 @@ def _would_create_cycle(
             return True
         visited.add(curr_id)
 
-        curr_event = session.get(FlowEventRecord, curr_id)
+        curr_event = _get_scoped_event(
+            session,
+            curr_id,
+            application_id=application_id,
+            environment=environment,
+        )
         if curr_event is None:
             for obj in session.new:
-                if isinstance(obj, FlowEventRecord) and obj.event_id == curr_id:
+                if (
+                    isinstance(obj, FlowEventRecord)
+                    and obj.event_id == curr_id
+                    and obj.application_id == application_id
+                    and obj.environment == environment
+                ):
                     curr_event = obj
                     break
 
@@ -244,11 +279,18 @@ def _would_create_cycle(
 def _find_lineage_record(
     session: Session,
     originating_event_id: UUID,
+    *,
+    application_id: str,
+    environment: str,
 ) -> LineageRecord | None:
     """Find the LineageRecord for a given originating_event_id across database and active session."""
     stmt = (
         select(LineageRecord)
-        .where(LineageRecord.originating_event_id == originating_event_id)
+        .where(
+            LineageRecord.originating_event_id == originating_event_id,
+            LineageRecord.application_id == application_id,
+            LineageRecord.environment == environment,
+        )
         .with_for_update()
     )
     record = session.execute(stmt).scalar_one_or_none()
@@ -256,7 +298,12 @@ def _find_lineage_record(
         return record
 
     for obj in session.new:
-        if isinstance(obj, LineageRecord) and obj.originating_event_id == originating_event_id:
+        if (
+            isinstance(obj, LineageRecord)
+            and obj.originating_event_id == originating_event_id
+            and obj.application_id == application_id
+            and obj.environment == environment
+        ):
             return obj
 
     return None
@@ -272,6 +319,8 @@ def _propagate_lineage_to_descendants(
         select(FlowEventRecord)
         .where(
             FlowEventRecord.flow_id == ancestor_lineage.flow_id,
+            FlowEventRecord.application_id == ancestor_lineage.application_id,
+            FlowEventRecord.environment == ancestor_lineage.environment,
             FlowEventRecord.parent_event_id == ancestor_event_id,
         )
         .with_for_update()
@@ -282,13 +331,20 @@ def _propagate_lineage_to_descendants(
         if (
             isinstance(obj, FlowEventRecord)
             and obj.flow_id == ancestor_lineage.flow_id
+            and obj.application_id == ancestor_lineage.application_id
+            and obj.environment == ancestor_lineage.environment
             and obj.parent_event_id == ancestor_event_id
             and obj not in descendants
         ):
             descendants.append(obj)
 
     for desc in descendants:
-        desc_lineage = _find_lineage_record(session, desc.event_id)
+        desc_lineage = _find_lineage_record(
+            session,
+            desc.event_id,
+            application_id=desc.application_id,
+            environment=desc.environment,
+        )
         if desc_lineage is not None:
             # Classification: if ancestor is complete, descendant becomes explicitly_derived
             if ancestor_lineage.lineage_classification in ("directly_observed", "explicitly_derived"):
@@ -318,6 +374,8 @@ def _resolve_pending_children(
         select(FlowEventRecord)
         .where(
             FlowEventRecord.flow_id == parent_record.flow_id,
+            FlowEventRecord.application_id == parent_record.application_id,
+            FlowEventRecord.environment == parent_record.environment,
             FlowEventRecord.parent_event_id.is_(None),
         )
         .with_for_update()
@@ -328,6 +386,8 @@ def _resolve_pending_children(
         if (
             isinstance(obj, FlowEventRecord)
             and obj.flow_id == parent_record.flow_id
+            and obj.application_id == parent_record.application_id
+            and obj.environment == parent_record.environment
             and obj.parent_event_id is None
             and obj not in candidates
         ):
@@ -345,7 +405,13 @@ def _resolve_pending_children(
             continue
 
         # Prevent cycles before linking (rejects both cycles involving child and cyclic parent chains)
-        if _would_create_cycle(child.event_id, parent_record.event_id, session):
+        if _would_create_cycle(
+            child.event_id,
+            parent_record.event_id,
+            session,
+            application_id=parent_record.application_id,
+            environment=parent_record.environment,
+        ):
             continue
 
         # Link child to parent and remove unresolved marker
@@ -355,7 +421,12 @@ def _resolve_pending_children(
         child.event_metadata = updated_child_meta
 
         # Update child LineageRecord
-        child_lineage = _find_lineage_record(session, child.event_id)
+        child_lineage = _find_lineage_record(
+            session,
+            child.event_id,
+            application_id=child.application_id,
+            environment=child.environment,
+        )
         if child_lineage is not None:
             child_lineage.parent_event_id = parent_record.event_id
 
@@ -424,7 +495,7 @@ class EventIngestionService:
         session: Session,
         event: FlowEvent,
         *,
-        environment: str = "development",
+        environment: str | None = None,
         application_id: str | None = None,
     ) -> FlowEventIngestionResponse:
         """Validate, normalize, persist, and record a FlowEvent into the flow graph and lineage DAG.
@@ -442,6 +513,14 @@ class EventIngestionService:
               Rolls back the failed transaction block, loads the committed record,
               and returns ALREADY_PROCESSED for identical content or raises EventPayloadConflictError for conflicting content.
         """
+        effective_environment = environment if environment is not None else event.environment
+        effective_application_id = application_id if application_id is not None else event.application_id
+        if (
+            event.environment != effective_environment
+            or event.application_id != effective_application_id
+        ):
+            raise ValueError("Event scope must match the authorized application and environment.")
+
         # Step 0: Acquire PostgreSQL transaction-scoped advisory lock for this flow_id
         # Must occur before duplicate-event checks, parent lookups, and graph updates
         _acquire_flow_advisory_lock(session, event.flow_id)
@@ -454,7 +533,13 @@ class EventIngestionService:
                     event_id=event.event_id,
                     parent_event_id=event.parent_event_id,
                 )
-            if _would_create_cycle(event.event_id, event.parent_event_id, session):
+            if _would_create_cycle(
+                event.event_id,
+                event.parent_event_id,
+                session,
+                application_id=effective_application_id,
+                environment=effective_environment,
+            ):
                 raise CyclicParentReferenceError(
                     f"Cyclic parent reference detected: event '{event.event_id}' cannot reference ancestor '{event.parent_event_id}'.",
                     event_id=event.event_id,
@@ -462,11 +547,18 @@ class EventIngestionService:
                 )
 
         # Step 2: Check if event is already persisted in the database (idempotent retry)
-        existing = session.get(FlowEventRecord, event.event_id)
+        existing = _get_scoped_event(
+            session,
+            event.event_id,
+            application_id=effective_application_id,
+            environment=effective_environment,
+            for_update=True,
+        )
         if existing is not None:
             if _events_match(event, existing):
                 return FlowEventIngestionResponse(
                     event_id=existing.event_id,
+                    duplicate=True,
                     status=IngestionStatus.ALREADY_PROCESSED,
                     flow_id=existing.flow_id,
                     edge_id=existing.edge_id,
@@ -485,10 +577,20 @@ class EventIngestionService:
         is_parent_unresolved = False
 
         if event.parent_event_id is not None:
-            parent_record = session.get(FlowEventRecord, event.parent_event_id)
+            parent_record = _get_scoped_event(
+                session,
+                event.parent_event_id,
+                application_id=effective_application_id,
+                environment=effective_environment,
+            )
             if parent_record is None:
                 for obj in session.new:
-                    if isinstance(obj, FlowEventRecord) and obj.event_id == event.parent_event_id:
+                    if (
+                        isinstance(obj, FlowEventRecord)
+                        and obj.event_id == event.parent_event_id
+                        and obj.application_id == effective_application_id
+                        and obj.environment == effective_environment
+                    ):
                         parent_record = obj
                         break
 
@@ -512,18 +614,23 @@ class EventIngestionService:
         # Step 5: Instantiate FlowEventRecord from incoming FlowEvent
         record = FlowEventRecord(
             event_id=event.event_id,
+            application_id=effective_application_id,
+            environment=effective_environment,
             flow_id=event.flow_id,
             correlation_id=event.correlation_id,
             parent_event_id=effective_parent_id,
             timestamp=event.timestamp,
-            source=event.source.model_dump(),
-            destination=event.destination.model_dump(),
+            source_component_id=event.source.component_id,
+            source_component_type=event.source.component_type,
+            source_component_name=event.source.name,
+            destination_component_id=event.destination.component_id,
+            destination_component_type=event.destination.component_type,
+            destination_component_name=event.destination.name,
             action=event.action,
             data_labels=list(event.data_labels or []),
             event_metadata=clean_metadata,
             status=event.status,
             duration_ms=event.duration_ms,
-            environment=environment,
         )
 
         # Step 6: Determine Lineage classification, depth, and safe transformation metadata
@@ -532,7 +639,12 @@ class EventIngestionService:
             classification = "directly_observed"
             depth = 0
         elif not is_parent_unresolved and parent_record is not None:
-            parent_lineage = _find_lineage_record(session, parent_record.event_id)
+            parent_lineage = _find_lineage_record(
+                session,
+                parent_record.event_id,
+                application_id=effective_application_id,
+                environment=effective_environment,
+            )
             if parent_lineage is not None:
                 if parent_lineage.lineage_classification in ("directly_observed", "explicitly_derived"):
                     classification = "explicitly_derived"
@@ -559,13 +671,15 @@ class EventIngestionService:
                 source_node, dest_node, edge = self.graph_service.record_event(
                     session,
                     record,
-                    environment=environment,
-                    application_id=application_id,
+                    environment=effective_environment,
+                    application_id=effective_application_id,
                 )
 
                 lineage_record = LineageRecord(
                     record_id=uuid4(),
                     flow_id=record.flow_id,
+                    application_id=record.application_id,
+                    environment=record.environment,
                     originating_event_id=record.event_id,
                     parent_event_id=record.parent_event_id,
                     source_node_id=record.source_node_id,
@@ -587,6 +701,7 @@ class EventIngestionService:
 
             return FlowEventIngestionResponse(
                 event_id=record.event_id,
+                duplicate=False,
                 status=IngestionStatus.ACCEPTED,
                 flow_id=record.flow_id,
                 edge_id=record.edge_id,
@@ -607,11 +722,17 @@ class EventIngestionService:
             if lineage_record is not None and lineage_record in session:
                 session.expunge(lineage_record)
 
-            committed = session.get(FlowEventRecord, event.event_id)
+            committed = _get_scoped_event(
+                session,
+                event.event_id,
+                application_id=effective_application_id,
+                environment=effective_environment,
+            )
             if committed is not None:
                 if _events_match(event, committed):
                     return FlowEventIngestionResponse(
                         event_id=committed.event_id,
+                        duplicate=True,
                         status=IngestionStatus.ALREADY_PROCESSED,
                         flow_id=committed.flow_id,
                         edge_id=committed.edge_id,

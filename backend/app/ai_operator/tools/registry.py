@@ -63,18 +63,35 @@ async def get_flow_lineage(*, component_id: str, direction: str, limit: int = 10
         result = await lookup_downstream_lineage(component_id, scope=scope, limit=limit, traversal_depth=traversal_depth)
 
     return {
-        "status": "unavailable" if result.unavailable else "success",
+        "status": (
+            "unavailable"
+            if result.unavailable
+            else "empty"
+            if not result.lineage
+            else "success"
+        ),
         "message": result.message or "No lineage record available.",
         "component_id": result.component_id,
         "direction": result.direction,
         "lineage": result.lineage,
+        "edges": result.edges,
         "scope": result.scope,
+        "completeness": result.completeness,
+        "truncated": result.truncated,
+        "unresolved_parent_event_ids": result.unresolved_parent_event_ids,
+        "warnings": [result.message] if result.message else [],
         "evidence": [{
             "evidence_type": "lineage",
             "record_id": result.component_id,
             "source_service": "lineage_service",
             "summary": result.message or "No lineage record available.",
-            "observation_status": "unavailable" if result.unavailable else "incomplete",
+            "observation_status": (
+                "unavailable"
+                if result.unavailable
+                else result.completeness
+                if result.completeness == "incomplete"
+                else "observed"
+            ),
             "relationship_type": result.direction,
         }],
     }

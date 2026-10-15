@@ -41,7 +41,7 @@ class GraphNode(Base):
 
     # Component Categorization and Identity
     component_type: Mapped[str] = mapped_column(
-        String(64),
+        String(100),
         nullable=False,
         doc="Component category (e.g., agent, model, api, db, tool).",
     )
@@ -65,7 +65,7 @@ class GraphNode(Base):
         doc="Optional application boundary or service group identifier.",
     )
     environment: Mapped[str] = mapped_column(
-        String(64),
+        String(100),
         nullable=False,
         default="development",
         server_default=text("'development'"),

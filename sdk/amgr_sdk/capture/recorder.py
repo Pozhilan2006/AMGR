@@ -18,20 +18,20 @@ def _resolve_data_labels(labels: Sequence[str] | str | None) -> list[str]:
     """Normalize data classification labels.
 
     Preserves explicitly supplied non-empty labels.
-    If no classification is available, returns ['unknown'].
+    If no classification is available, returns an empty list rather than inventing one.
     """
     if labels is None:
-        return ["unknown"]
+        return []
     if isinstance(labels, str):
         cleaned = labels.strip()
-        return [cleaned] if cleaned else ["unknown"]
+        return [cleaned] if cleaned else []
     cleaned_list: list[str] = []
     for item in labels:
         if isinstance(item, str) and item.strip():
             stripped = item.strip()
             if stripped not in cleaned_list:
                 cleaned_list.append(stripped)
-    return cleaned_list if cleaned_list else ["unknown"]
+    return cleaned_list
 
 
 class ActiveOperation(AbstractContextManager["ActiveOperation"]):
@@ -48,7 +48,7 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
         *,
         action: str,
         destination: ComponentRef,
-        source: ComponentRef,
+        source: ComponentRef | None,
         data_labels: list[str],
         metadata: dict[str, Any] | None = None,
         flow_id: UUID,
@@ -81,13 +81,11 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
         self.metadata[key] = value
 
     def add_data_label(self, label: str) -> None:
-        """Add a classification label, removing the fallback 'unknown' label if present."""
+        """Add a caller-supplied classification label."""
         stripped = label.strip()
         if not stripped:
             return
-        if self.data_labels == ["unknown"]:
-            self.data_labels = [stripped]
-        elif stripped not in self.data_labels:
+        if stripped not in self.data_labels:
             self.data_labels.append(stripped)
 
     def enter_context(self) -> None:
@@ -114,7 +112,7 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
         metadata: dict[str, Any] | None = None,
         status: str = "completed",
         duration_ms: float | None = None,
-    ) -> FlowEvent:
+    ) -> FlowEvent | None:
         """Record successful completion of this operation."""
         if self._is_completed and self._completed_event is not None:
             logger.warning(
@@ -122,6 +120,10 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
                 self.event_id,
             )
             return self._completed_event
+        if not self._recorder.recording_enabled:
+            self._is_completed = True
+            self.exit_context()
+            return None
 
         try:
             if metadata:
@@ -138,6 +140,8 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
 
             event = FlowEvent(
                 event_id=self.event_id,
+                application_id=self._recorder.application_id,
+                environment=self._recorder.environment,
                 flow_id=self.flow_id,
                 correlation_id=self.correlation_id,
                 parent_event_id=self.parent_event_id,
@@ -163,7 +167,7 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
         metadata: dict[str, Any] | None = None,
         status: str = "failed",
         duration_ms: float | None = None,
-    ) -> FlowEvent:
+    ) -> FlowEvent | None:
         """Record failed completion of this operation."""
         if self._is_completed and self._completed_event is not None:
             logger.warning(
@@ -171,16 +175,17 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
                 self.event_id,
             )
             return self._completed_event
+        if not self._recorder.recording_enabled:
+            self._is_completed = True
+            self.exit_context()
+            return None
 
         try:
             if metadata:
                 self.metadata.update(metadata)
 
             if isinstance(error, BaseException):
-                self.metadata["error"] = type(error).__name__
-                self.metadata["error_message"] = str(error)
-            else:
-                self.metadata["error"] = str(error)
+                self.metadata["error_type"] = type(error).__name__
 
             if duration_ms is None:
                 duration_ms = max(0.0, round((time.perf_counter() - self.start_time) * 1000.0, 2))
@@ -193,6 +198,8 @@ class ActiveOperation(AbstractContextManager["ActiveOperation"]):
 
             event = FlowEvent(
                 event_id=self.event_id,
+                application_id=self._recorder.application_id,
+                environment=self._recorder.environment,
                 flow_id=self.flow_id,
                 correlation_id=self.correlation_id,
                 parent_event_id=self.parent_event_id,
@@ -252,11 +259,19 @@ class EventRecorder:
         strict: bool = False,
         sensitive_field_keys: Sequence[str] = (),
         redact_sensitive_fields: bool = True,
+        application_id: str | None = None,
+        environment: str | None = None,
+        recording_enabled: bool = True,
     ) -> None:
         self._transport = transport
         self.strict = strict
         self.sensitive_field_keys = tuple(sensitive_field_keys)
         self.redact_sensitive_fields = redact_sensitive_fields
+        if (application_id is None) != (environment is None):
+            raise ValueError("application_id and environment must be configured together.")
+        self.application_id = application_id
+        self.environment = environment
+        self.recording_enabled = recording_enabled
 
     @property
     def transport(self) -> Transport:
@@ -264,6 +279,8 @@ class EventRecorder:
 
     def record(self, event: FlowEvent) -> None:
         """Dispatch a single FlowEvent to the underlying transport."""
+        if not self.recording_enabled:
+            return
         try:
             self._transport.send(event)
         except Exception as exc:
@@ -273,6 +290,8 @@ class EventRecorder:
 
     def record_batch(self, events: Sequence[FlowEvent]) -> None:
         """Dispatch a sequence of FlowEvents to the underlying transport."""
+        if not self.recording_enabled:
+            return
         try:
             self._transport.send_batch(events)
         except Exception as exc:
@@ -345,16 +364,17 @@ class EventRecorder:
             with recorder.start_operation(...) as op:
                 ...
         """
+        if self.recording_enabled and (self.application_id is None or self.environment is None):
+            raise ValueError(
+                "Event capture requires application_id and environment on EventRecorder."
+            )
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
         resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
         resolved_parent_id = parent_event_id if parent_event_id is not None else (ctx.parent_event_id if ctx else None)
         resolved_source = source or (ctx.current_component if ctx and ctx.current_component else None)
         if resolved_source is None:
-            resolved_source = ComponentRef(
-                component_id="unknown-source",
-                component_type="service",
-            )
+            raise ValueError("Event source must be specified or set in the active FlowContext.")
 
         resolved_labels = _resolve_data_labels(data_labels)
 
@@ -381,7 +401,7 @@ class EventRecorder:
         metadata: dict[str, Any] | None = None,
         status: str = "completed",
         duration_ms: float | None = None,
-    ) -> FlowEvent:
+    ) -> FlowEvent | None:
         """Record successful completion of an active operation."""
         return operation.succeed(
             metadata=metadata,
@@ -397,7 +417,7 @@ class EventRecorder:
         metadata: dict[str, Any] | None = None,
         status: str = "failed",
         duration_ms: float | None = None,
-    ) -> FlowEvent:
+    ) -> FlowEvent | None:
         """Record failed completion of an active operation."""
         return operation.fail(
             error=error,
@@ -422,6 +442,10 @@ class EventRecorder:
         event_id: UUID | None = None,
     ) -> FlowEvent:
         """Record a known source-to-destination data transfer event."""
+        if not self.recording_enabled:
+            return None  # type: ignore[return-value]
+        if self.application_id is None or self.environment is None:
+            raise ValueError("Event capture requires application_id and environment on EventRecorder.")
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
         resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
@@ -440,6 +464,8 @@ class EventRecorder:
 
         event = FlowEvent(
             event_id=event_id or uuid4(),
+            application_id=self.application_id,
+            environment=self.environment,
             flow_id=resolved_flow_id,
             correlation_id=resolved_corr_id,
             parent_event_id=resolved_parent_id,
@@ -505,16 +531,17 @@ class EventRecorder:
         using ambient context when not explicitly supplied. Applies data classification
         and sanitization rules.
         """
+        if not self.recording_enabled:
+            return None  # type: ignore[return-value]
+        if self.application_id is None or self.environment is None:
+            raise ValueError("Event capture requires application_id and environment on EventRecorder.")
         ctx = current_flow_context()
         resolved_flow_id = flow_id or (ctx.flow_id if ctx else uuid4())
         resolved_corr_id = correlation_id if correlation_id is not None else (ctx.correlation_id if ctx else resolved_flow_id)
         resolved_parent_id = parent_event_id if parent_event_id is not None else (ctx.parent_event_id if ctx else None)
         resolved_source = source or (ctx.current_component if ctx and ctx.current_component else None)
         if resolved_source is None:
-            resolved_source = ComponentRef(
-                component_id="unknown-source",
-                component_type="service",
-            )
+            raise ValueError("Event source must be specified or set in the active FlowContext.")
 
         resolved_labels = _resolve_data_labels(data_labels)
         sanitized_meta = (
@@ -529,6 +556,8 @@ class EventRecorder:
 
         event = FlowEvent(
             event_id=event_id or uuid4(),
+            application_id=self.application_id,
+            environment=self.environment,
             flow_id=resolved_flow_id,
             correlation_id=resolved_corr_id,
             parent_event_id=resolved_parent_id,

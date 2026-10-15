@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+﻿from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -59,15 +59,18 @@ class ComponentRef(BaseModel):
     component_id: str = Field(
         ...,
         min_length=1,
+        max_length=200,
         description="Stable identifier for the component (e.g. agent-1, gpt-4o, sql-db).",
     )
     component_type: str = Field(
         ...,
         min_length=1,
+        max_length=100,
         description="Category such as agent, model, api, db/database, tool, or service.",
     )
     name: str | None = Field(
         default=None,
+        max_length=200,
         description="Optional human-readable name for the component.",
     )
 
@@ -134,6 +137,18 @@ class FlowEvent(BaseModel):
         default_factory=uuid4,
         description="Unique identifier for this individual event.",
     )
+    application_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Authorized application boundary assigned by the SDK configuration.",
+    )
+    environment: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Deployment environment assigned by the SDK configuration.",
+    )
     flow_id: UUID = Field(
         ...,
         description="Correlation key for the runtime flow or execution tree as a whole.",
@@ -161,6 +176,7 @@ class FlowEvent(BaseModel):
     action: str = Field(
         ...,
         min_length=1,
+        max_length=500,
         description="Operation or event label carried by the event (e.g. model.inference).",
     )
     data_labels: list[str] = Field(
@@ -174,6 +190,7 @@ class FlowEvent(BaseModel):
     status: str = Field(
         default="observed",
         min_length=1,
+        max_length=100,
         description="Business or processing status, such as 'observed' or 'blocked'.",
     )
     duration_ms: float | None = Field(
@@ -210,6 +227,14 @@ class FlowEvent(BaseModel):
             raise ValueError("Field must not be empty or whitespace-only.")
         return stripped
 
+    @field_validator("application_id", "environment")
+    @classmethod
+    def validate_scope_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Application and environment scope must not be empty.")
+        return stripped
+
     @field_validator("data_labels")
     @classmethod
     def validate_data_labels(cls, value: list[str]) -> list[str]:
@@ -225,16 +250,7 @@ class FlowEvent(BaseModel):
     @field_validator("metadata")
     @classmethod
     def validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
-        for key in value:
-            if isinstance(key, str) and key.lower().replace("-", "_") in DISALLOWED_METADATA_KEYS:
-                # If value is already redacted, permit the key
-                if value[key] == "[REDACTED]":
-                    continue
-                raise ValueError(
-                    f"Sensitive key {key!r} is not permitted in event metadata. "
-                    "Secrets and credentials must not be emitted in telemetry."
-                )
-        return value
+        return sanitize_metadata(value, redact=False)
 
 
 def sanitize_metadata(
@@ -258,23 +274,29 @@ def sanitize_metadata(
         if isinstance(k, str) and k.strip():
             sensitive_keys.add(k.strip().lower().replace("-", "_"))
 
-    sanitized: dict[str, Any] = {}
-    for key, value in metadata.items():
-        if isinstance(key, str) and key.lower().replace("-", "_") in sensitive_keys:
-            if redact:
-                sanitized[key] = redaction_placeholder
+    def sanitize_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return sanitize_mapping(value)
+        if isinstance(value, list):
+            return [sanitize_value(item) for item in value]
+        return value
+
+    def sanitize_mapping(values: dict[str, Any]) -> dict[str, Any]:
+        sanitized: dict[str, Any] = {}
+        for key, value in values.items():
+            normalized_key = key.lower().replace("-", "_") if isinstance(key, str) else ""
+            if normalized_key in sensitive_keys:
+                if value == "[REDACTED]":
+                    sanitized[key] = value
+                elif redact:
+                    sanitized[key] = redaction_placeholder
+                else:
+                    raise ValueError(
+                        f"Sensitive key {key!r} is not permitted in event metadata. "
+                        "Secrets and credentials must not be emitted in telemetry."
+                    )
             else:
-                raise ValueError(
-                    f"Sensitive key {key!r} is not permitted in event metadata. "
-                    "Secrets and credentials must not be emitted in telemetry."
-                )
-        elif isinstance(value, dict):
-            sanitized[key] = sanitize_metadata(
-                value,
-                additional_sensitive_keys=additional_sensitive_keys,
-                redact=redact,
-                redaction_placeholder=redaction_placeholder,
-            )
-        else:
-            sanitized[key] = value
-    return sanitized
+                sanitized[key] = sanitize_value(value)
+        return sanitized
+
+    return sanitize_mapping(metadata)
