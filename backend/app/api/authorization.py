@@ -12,6 +12,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
+from backend.app.repositories.approval_repository import (
+    ApprovalPersistenceError,
+    ApprovalRepository,
+)
 from backend.app.repositories.decision_repository import DecisionRepository
 from backend.app.repositories.policy_repository import PolicyRepository
 from backend.app.schemas.adapter import (
@@ -40,6 +44,7 @@ from backend.app.services.authorization_service import AuthorizationService
 
 # Module-level default singleton dependencies
 _policy_repo_instance: PolicyRepository | None = None
+_approval_repo_instance: ApprovalRepository | None = None
 _approval_service_instance: ApprovalService | None = None
 _decision_repo_instance: DecisionRepository | None = None
 _auth_service_instance: AuthorizationService | None = None
@@ -53,11 +58,24 @@ def get_policy_repository() -> PolicyRepository:
     return _policy_repo_instance
 
 
-def get_approval_service() -> ApprovalService:
+def get_approval_repository() -> ApprovalRepository:
+    """Dependency provider for ApprovalRepository."""
+    global _approval_repo_instance
+    if _approval_repo_instance is None:
+        _approval_repo_instance = ApprovalRepository()
+    return _approval_repo_instance
+
+
+def get_approval_service(
+    approval_repo: ApprovalRepository = Depends(get_approval_repository),
+) -> ApprovalService:
     """Dependency provider for ApprovalService."""
     global _approval_service_instance
-    if _approval_service_instance is None:
-        _approval_service_instance = ApprovalService()
+    if (
+        _approval_service_instance is None
+        or _approval_service_instance.repository is not approval_repo
+    ):
+        _approval_service_instance = ApprovalService(repository=approval_repo)
     return _approval_service_instance
 
 
@@ -95,10 +113,12 @@ def reset_services(
     approval_service: ApprovalService | None = None,
     auth_service: AuthorizationService | None = None,
     decision_repo: DecisionRepository | None = None,
+    approval_repo: ApprovalRepository | None = None,
 ) -> None:
     """Resets or overrides the default module-level service instances."""
-    global _policy_repo_instance, _approval_service_instance, _auth_service_instance, _decision_repo_instance
+    global _policy_repo_instance, _approval_repo_instance, _approval_service_instance, _auth_service_instance, _decision_repo_instance
     _policy_repo_instance = policy_repo
+    _approval_repo_instance = approval_repo
     _approval_service_instance = approval_service
     _auth_service_instance = auth_service
     _decision_repo_instance = decision_repo

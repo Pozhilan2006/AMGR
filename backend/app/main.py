@@ -63,6 +63,7 @@ def _compile_text_sqlite(element: Any, compiler: Any, **kw: Any) -> str:
     return text_val.replace("::jsonb", "")
 
 from backend.app.api.authorization import (
+    get_approval_repository,
     get_approval_service,
     get_authorization_service,
     get_decision_repository,
@@ -73,6 +74,7 @@ from backend.app.api.routes.policies import (
     get_policy_service,
     router as policies_router,
 )
+from backend.app.repositories.approval_repository import ApprovalRepository
 from backend.app.repositories.decision_repository import DecisionRepository
 from backend.app.repositories.policy_repository import PolicyRepository
 from backend.app.services.approval_service import ApprovalService
@@ -89,6 +91,7 @@ def create_app(
     auth_service: AuthorizationService | None = None,
     policy_service: PolicyService | None = None,
     decision_repo: DecisionRepository | None = None,
+    approval_repo: ApprovalRepository | None = None,
 ) -> FastAPI:
     """Creates and configures the FastAPI application instance.
 
@@ -112,6 +115,8 @@ def create_app(
     # Dependency overrides if custom instances were provided
     if policy_repo is not None:
         app_instance.dependency_overrides[get_policy_repository] = lambda: policy_repo
+    if approval_repo is not None:
+        app_instance.dependency_overrides[get_approval_repository] = lambda: approval_repo
     if approval_service is not None:
         app_instance.dependency_overrides[get_approval_service] = lambda: approval_service
     if auth_service is not None:

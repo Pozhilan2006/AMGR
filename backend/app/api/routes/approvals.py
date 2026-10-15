@@ -1,11 +1,10 @@
-from fastapi import APIRouter, HTTPException, status
+"""Governance approvals API routes module.
 
-router = APIRouter()
+Canonical approval endpoints are defined and served by
+`backend.app.api.authorization` via `ApprovalService` and `ApprovalRepository`.
+This module maintains `router` for backwards compatibility with central imports.
+"""
 
+from fastapi import APIRouter
 
-@router.get("")
-def list_approvals() -> None:
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Approval processing is not implemented.",
-    )
+router = APIRouter()
