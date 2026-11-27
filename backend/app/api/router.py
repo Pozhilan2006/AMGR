@@ -2,6 +2,7 @@
 
 try:
     from backend.app.api.routes import (
+        approvals,
         authorization,
         flow_events,
         graph,
@@ -12,6 +13,7 @@ try:
     )
 except ImportError:
     from app.api.routes import (
+        approvals,
         authorization,
         flow_events,
         graph,
@@ -22,6 +24,7 @@ except ImportError:
     )
 
 api_router = APIRouter()
+
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(flow_events.router, prefix="/flow-events", tags=["flow-events"])
 api_router.include_router(lineage.router, prefix="/lineage", tags=["lineage"])

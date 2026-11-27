@@ -305,7 +305,6 @@ class AMGRConfig:
             backoff_jitter=backoff_jitter,
             shutdown_timeout_seconds=shutdown_timeout,
             buffered=buffered,
-        )
             fail_closed=fail_closed,
             enforcement_timeout_seconds=enf_timeout,
         )

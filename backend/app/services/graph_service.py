@@ -1,4 +1,5 @@
-﻿"""Graph persistence service for AMGR flow graph entities."""
+﻿
+"""Graph persistence service for AMGR flow graph entities."""
 
 from datetime import datetime, timezone
 from typing import Any
@@ -20,7 +21,11 @@ from app.schemas.graph import (
     GraphNode as GraphNodeSchema,
     GraphResponse,
 )
-from app.schemas.graph_queries import GraphNeighborhoodResponse, GraphPathResponse, GraphSnapshotResponse
+from app.schemas.graph_queries import (
+    GraphNeighborhoodResponse,
+    GraphPathResponse,
+    GraphSnapshotResponse,
+)
 
 # Deny-list substrings for metadata sanitization to protect secrets and prompts
 FORBIDDEN_METADATA_KEYS = {
@@ -146,16 +151,20 @@ def _sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         key_lower = key.strip().lower()
         if any(bad in key_lower for bad in FORBIDDEN_METADATA_KEYS):
             continue
+
         # Restrict value types to primitives / small representations
         if isinstance(val, (str, int, float, bool)) or val is None:
             clean[key] = val
-        elif isinstance(val, list) and all(isinstance(x, (str, int, float, bool)) for x in val):
+        elif isinstance(val, list) and all(
+            isinstance(x, (str, int, float, bool)) for x in val
+        ):
             clean[key] = val
         elif isinstance(val, dict):
             # Recurse one level for nested safe dictionaries
             clean_sub = _sanitize_metadata(val)
             if clean_sub:
                 clean[key] = clean_sub
+
     return clean
 
 
@@ -186,14 +195,24 @@ class GraphService:
         data_label: str | None = None,
     ) -> GraphSnapshotResponse:
         if self._repository is None:
-            raise ValueError("A GraphRepository is required for graph query operations.")
+            raise ValueError(
+                "A GraphRepository is required for graph query operations."
+            )
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500.")
         if offset < 0:
             raise ValueError("offset must be non-negative.")
+
         return self._repository.list_snapshot(
-            scope=scope, limit=limit, offset=offset, component_type=component_type,
-            flow_id=flow_id, start=start, end=end, action=action, data_label=data_label,
+            scope=scope,
+            limit=limit,
+            offset=offset,
+            component_type=component_type,
+            flow_id=flow_id,
+            start=start,
+            end=end,
+            action=action,
+            data_label=data_label,
         )
 
     def get_neighborhood(
@@ -206,7 +225,9 @@ class GraphService:
         offset: int = 0,
     ) -> GraphNeighborhoodResponse:
         if self._repository is None:
-            raise ValueError("A GraphRepository is required for graph query operations.")
+            raise ValueError(
+                "A GraphRepository is required for graph query operations."
+            )
         if not component_id.strip():
             raise ValueError("component_id is required.")
         if direction not in {"incoming", "outgoing", "both"}:
@@ -215,13 +236,25 @@ class GraphService:
             raise ValueError("limit must be between 1 and 100.")
         if offset < 0:
             raise ValueError("offset must be non-negative.")
+
         entries, _ = self._repository.neighborhood(
-            component_id=component_id, scope=scope, direction=direction, limit=limit, offset=offset
+            component_id=component_id,
+            scope=scope,
+            direction=direction,
+            limit=limit,
+            offset=offset,
         )
+
         return GraphNeighborhoodResponse(
-            component_id=component_id, neighbors=entries,
-            metadata={"direction": direction, "limit": limit, "offset": offset},
-            unavailable=False, message="Observed component neighbors in the authorized scope.",
+            component_id=component_id,
+            neighbors=entries,
+            metadata={
+                "direction": direction,
+                "limit": limit,
+                "offset": offset,
+            },
+            unavailable=False,
+            message="Observed component neighbors in the authorized scope.",
         )
 
     def get_paths(
@@ -234,38 +267,55 @@ class GraphService:
         limit: int = 10,
     ) -> GraphPathResponse:
         if self._repository is None:
-            raise ValueError("A GraphRepository is required for graph query operations.")
+            raise ValueError(
+                "A GraphRepository is required for graph query operations."
+            )
         if not source_component_id.strip() or not destination_component_id.strip():
-            raise ValueError("source_component_id and destination_component_id are required.")
+            raise ValueError(
+                "source_component_id and destination_component_id are required."
+            )
         if not 1 <= max_depth <= 8:
             raise ValueError("max_depth must be between 1 and 8.")
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50.")
+
         paths = self._repository.find_paths(
             source_component_id=source_component_id,
             destination_component_id=destination_component_id,
-            scope=scope, max_depth=max_depth, limit=limit,
+            scope=scope,
+            max_depth=max_depth,
+            limit=limit,
         )
+
         if not paths:
             return GraphPathResponse(
                 source_component_id=source_component_id,
                 destination_component_id=destination_component_id,
-                paths=[], completeness="complete",
+                paths=[],
+                completeness="complete",
                 message="No supported component path was found in the authorized scope.",
             )
+
         return GraphPathResponse(
             source_component_id=source_component_id,
             destination_component_id=destination_component_id,
             paths=[
                 {
-                    "path_id": f"path:{index}", "nodes": path,
-                    "edges": [f"edge:{path[i]}->{path[i + 1]}" for i in range(len(path) - 1)],
+                    "path_id": f"path:{index}",
+                    "nodes": path,
+                    "edges": [
+                        f"edge:{path[i]}->{path[i + 1]}"
+                        for i in range(len(path) - 1)
+                    ],
                     "evidence": ["recorded_component_interactions"],
                 }
                 for index, path in enumerate(paths, start=1)
             ],
             completeness="incomplete" if len(paths) >= limit else "complete",
-            message="Paths represent recorded component interactions only; they do not prove data movement.",
+            message=(
+                "Paths represent recorded component interactions only; "
+                "they do not prove data movement."
+            ),
         )
 
     def resolve_node(
@@ -296,20 +346,30 @@ class GraphService:
         if isinstance(component, ComponentRef):
             comp_id = component.component_id
             comp_type = component.component_type
-            disp_name = display_name if display_name is not None else component.name
+            disp_name = (
+                display_name if display_name is not None else component.name
+            )
         elif isinstance(component, dict):
             comp_id = str(component.get("component_id", ""))
-            comp_type = str(component.get("component_type", component_type or ""))
-            disp_name = display_name if display_name is not None else component.get("name")
+            comp_type = str(
+                component.get("component_type", component_type or "")
+            )
+            disp_name = (
+                display_name if display_name is not None else component.get("name")
+            )
         elif isinstance(component, str):
             comp_id = component
             comp_type = component_type or "unknown"
             disp_name = display_name
         else:
-            raise ValueError(f"Unsupported component specification: {type(component)}")
+            raise ValueError(
+                f"Unsupported component specification: {type(component)}"
+            )
 
         if not comp_id or not comp_type:
-            raise ValueError("Both component_id and component_type are required to resolve a GraphNode.")
+            raise ValueError(
+                "Both component_id and component_type are required to resolve a GraphNode."
+            )
 
         # Query existing node using natural key
         stmt = select(GraphNodeModel).where(
@@ -317,6 +377,7 @@ class GraphService:
             GraphNodeModel.component_type == comp_type,
             GraphNodeModel.external_component_id == comp_id,
         )
+
         if application_id is None:
             stmt = stmt.where(GraphNodeModel.application_id.is_(None))
         else:
@@ -399,6 +460,7 @@ class GraphService:
             )
             .with_for_update()
         )
+
         edge = session.execute(stmt).scalar_one_or_none()
         now = observed_at or datetime.now(timezone.utc)
         clean_meta = _sanitize_metadata(metadata)
@@ -418,22 +480,39 @@ class GraphService:
                 "data_labels": incoming_labels,
                 "edge_metadata": clean_meta,
             }
+
             dialect = session.get_bind().dialect.name
+
             if dialect == "postgresql":
-                insert_stmt = pg_insert(GraphEdgeModel).values(**values).on_conflict_do_nothing(
-                    constraint="uq_graph_edges_connection"
+                insert_stmt = (
+                    pg_insert(GraphEdgeModel)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        constraint="uq_graph_edges_connection"
+                    )
                 )
             elif dialect == "sqlite":
-                insert_stmt = sqlite_insert(GraphEdgeModel).values(**values).on_conflict_do_nothing(
-                    index_elements=["source_node_id", "destination_node_id", "action"]
+                insert_stmt = (
+                    sqlite_insert(GraphEdgeModel)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            "source_node_id",
+                            "destination_node_id",
+                            "action",
+                        ]
+                    )
                 )
             else:
                 edge = GraphEdgeModel(**values)
                 session.add(edge)
                 session.flush()
+
                 if event_id is not None:
                     _track_event_in_tx(session, edge.edge_id, event_id)
+
                 return edge
+
             insert_res = session.execute(insert_stmt)
             edge = session.execute(stmt).scalar_one()
 
@@ -447,8 +526,11 @@ class GraphService:
         # Existing edge or concurrent edge created by another worker:
         # Determine if this event already contributed to this edge
         is_new_event = True
+
         if event_id is not None or event is not None:
-            resolved_event_id = event.event_id if event is not None else event_id
+            resolved_event_id = (
+                event.event_id if event is not None else event_id
+            )
 
             # Check 1: Explicit ORM event instance passed directly
             if event is not None and isinstance(event, FlowEventRecord):
@@ -462,9 +544,16 @@ class GraphService:
                     FlowEventRecord.event_id == resolved_event_id,
                     FlowEventRecord.environment == environment,
                 )
+
                 if application_id is not None:
-                    persisted_stmt = persisted_stmt.where(FlowEventRecord.application_id == application_id)
-                persisted_event = session.execute(persisted_stmt).scalar_one_or_none()
+                    persisted_stmt = persisted_stmt.where(
+                        FlowEventRecord.application_id == application_id
+                    )
+
+                persisted_event = (
+                    session.execute(persisted_stmt).scalar_one_or_none()
+                )
+
                 if persisted_event is None:
                     # Also inspect pending unflushed instances in session.new
                     for obj in session.new:
@@ -472,7 +561,10 @@ class GraphService:
                             isinstance(obj, FlowEventRecord)
                             and obj.event_id == resolved_event_id
                             and obj.environment == environment
-                            and (application_id is None or obj.application_id == application_id)
+                            and (
+                                application_id is None
+                                or obj.application_id == application_id
+                            )
                         ):
                             persisted_event = obj
                             break
@@ -483,7 +575,9 @@ class GraphService:
 
             # Check 3: Transaction-scoped tracking for unpersisted events
             if is_new_event and edge is not None and resolved_event_id is not None:
-                if _is_event_tracked_in_tx(session, edge.edge_id, resolved_event_id):
+                if _is_event_tracked_in_tx(
+                    session, edge.edge_id, resolved_event_id
+                ):
                     is_new_event = False
 
         # Advance last_observed_at
@@ -496,7 +590,9 @@ class GraphService:
         # Merge data labels without duplicates
         if incoming_labels:
             existing_set = set(edge.data_labels or [])
-            new_labels = [lbl for lbl in incoming_labels if lbl not in existing_set]
+            new_labels = [
+                lbl for lbl in incoming_labels if lbl not in existing_set
+            ]
             if new_labels:
                 edge.data_labels = list(edge.data_labels or []) + new_labels
 
@@ -552,6 +648,7 @@ class GraphService:
             application_id=application_id,
             observed_at=timestamp,
         )
+
         dest_node = self.resolve_node(
             session,
             dest_ref,
@@ -559,6 +656,7 @@ class GraphService:
             application_id=application_id,
             observed_at=timestamp,
         )
+
         edge = self.resolve_edge(
             session,
             source_node.node_id,
@@ -579,24 +677,34 @@ class GraphService:
             event.source_node_id = source_node.node_id
             event.destination_node_id = dest_node.node_id
             event.edge_id = edge.edge_id
+
         elif event_id is not None:
             persisted_stmt = select(FlowEventRecord).where(
                 FlowEventRecord.event_id == event_id,
                 FlowEventRecord.environment == environment,
             )
+
             if application_id is not None:
-                persisted_stmt = persisted_stmt.where(FlowEventRecord.application_id == application_id)
+                persisted_stmt = persisted_stmt.where(
+                    FlowEventRecord.application_id == application_id
+                )
+
             persisted = session.execute(persisted_stmt).scalar_one_or_none()
+
             if persisted is None:
                 for obj in session.new:
-                if (
-                    isinstance(obj, FlowEventRecord)
-                    and obj.event_id == event_id
-                    and obj.environment == environment
-                    and (application_id is None or obj.application_id == application_id)
-                ):
+                    if (
+                        isinstance(obj, FlowEventRecord)
+                        and obj.event_id == event_id
+                        and obj.environment == environment
+                        and (
+                            application_id is None
+                            or obj.application_id == application_id
+                        )
+                    ):
                         persisted = obj
                         break
+
             if persisted is not None:
                 persisted.source_node_id = source_node.node_id
                 persisted.destination_node_id = dest_node.node_id
@@ -615,23 +723,33 @@ class GraphService:
         If environment is provided, filters nodes and edges matching that environment.
         """
         stmt_nodes = select(GraphNodeModel)
+
         if environment is not None:
-            stmt_nodes = stmt_nodes.where(GraphNodeModel.environment == environment)
+            stmt_nodes = stmt_nodes.where(
+                GraphNodeModel.environment == environment
+            )
 
         nodes_orm = session.execute(stmt_nodes).scalars().all()
-        nodes_schema = [GraphNodeSchema.model_validate(n) for n in nodes_orm]
+        nodes_schema = [
+            GraphNodeSchema.model_validate(node) for node in nodes_orm
+        ]
 
         if environment is not None:
             stmt_edges = (
                 select(GraphEdgeModel)
-                .join(GraphNodeModel, GraphEdgeModel.source_node_id == GraphNodeModel.node_id)
+                .join(
+                    GraphNodeModel,
+                    GraphEdgeModel.source_node_id == GraphNodeModel.node_id,
+                )
                 .where(GraphNodeModel.environment == environment)
             )
         else:
             stmt_edges = select(GraphEdgeModel)
 
         edges_orm = session.execute(stmt_edges).scalars().all()
-        edges_schema = [GraphEdgeSchema.model_validate(e) for e in edges_orm]
+        edges_schema = [
+            GraphEdgeSchema.model_validate(edge) for edge in edges_orm
+        ]
 
         return GraphResponse(
             nodes=nodes_schema,
